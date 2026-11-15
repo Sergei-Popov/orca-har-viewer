@@ -17,16 +17,16 @@ export function helloArrived({ themed, onTheme, timeoutMs = 2000 }: HelloSignals
   if (!onTheme || themed()) return Promise.resolve()
   return new Promise((resolve) => {
     let done = false
-    let subscription: { dispose(): void } | undefined
+    let listener: { dispose(): void } | undefined
     const finish = () => {
       if (done) return
       done = true
       clearTimeout(timer)
-      subscription?.dispose()
+      listener?.dispose()
       resolve()
     }
     const timer = setTimeout(finish, timeoutMs)
-    subscription = onTheme(finish)
-    if (done) subscription.dispose()
+    listener = onTheme(finish)
+    if (done) listener.dispose()
   })
 }
