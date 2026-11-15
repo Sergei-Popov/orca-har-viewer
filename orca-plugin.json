@@ -5,7 +5,7 @@
   "id": "har-viewer",
   "name": "HAR Viewer",
   "version": "0.1.0",
-  "description": "HTTP Archive files in Orca's editor tabs: opens .har recordings from browsers and agents, and .har.zip from Playwright, as a network log with a fast request list and waterfall, filters by text, type, errors, page and domain, and the headers, payload, response (JSON tree, highlighted source, images and media), cookies, timing, WebSocket messages and initiator of each request. Copy a request as cURL or fetch, export a Markdown digest for coding agents, or save a copy with tokens, cookies and keys masked. Works offline and never edits the file. Independent; not affiliated with Playwright or any browser maker.",
+  "description": "HTTP Archive files in Orca's editor tabs: opens .har recordings from browsers and agents, and .har.zip from Playwright, as a network log with a fast request list and waterfall, filters by text, type, errors, page and domain, and the headers, payload, response (JSON tree, highlighted source, images and media), cookies, timing, WebSocket messages and initiator of each request. Copy a request as cURL or fetch, export a Markdown digest for coding agents, or save a copy with known secret patterns (tokens, cookies, keys) masked. Works offline and never edits the file. Independent; not affiliated with Playwright or any browser maker.",
   "author": {
     "name": "Sergei Popov",
     "url": "https://github.com/Sergei-Popov"
