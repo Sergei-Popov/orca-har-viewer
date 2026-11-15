@@ -1,32 +1,49 @@
 {
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
   "manifestVersion": 2,
+  "execution": "sandboxed-ui",
   "id": "har-viewer",
   "name": "HAR Viewer",
   "version": "0.1.0",
-  "description": "Opens HTTP Archive (.har) files from browsers, Playwright and agents as a DevTools-style network log: request list with a waterfall, filters, headers, bodies and timings, plus an export with secrets removed. Offline.",
+  "description": "HTTP Archive files in Orca's editor tabs: opens .har recordings from browsers and agents, and .har.zip from Playwright, as a network log with a fast request list and waterfall, filters by text, type, errors, page and domain, and the headers, payload, response (JSON tree, highlighted source, images and media), cookies, timing, WebSocket messages and initiator of each request. Copy a request as cURL or fetch, export a Markdown digest for coding agents, or save a copy with tokens, cookies and keys masked. Works offline and never edits the file. Independent; not affiliated with Playwright or any browser maker.",
+  "author": {
+    "name": "Sergei Popov",
+    "url": "https://github.com/Sergei-Popov"
+  },
+  "repository": "https://github.com/Sergei-Popov/orca-har-viewer",
+  "license": "MIT",
+  "icon": "images/icon.png",
   "engines": {
     "orca": ">=1.4.248"
   },
-  "execution": "sandboxed-ui",
   "pluginApi": 1,
   "contributes": {
     "customEditors": [
       {
-        "id": "har-viewer",
+        "id": "har",
         "title": "HAR Viewer",
+        "icon": "icons/har.png",
         "extensions": [
-          ".har-viewer"
+          ".har"
         ],
-        "entry": "editor/main.ts",
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "text",
+        "frame": "isolated"
+      },
+      {
+        "id": "har-zip",
+        "title": "HAR Viewer",
+        "icon": "icons/har.png",
+        "extensions": [
+          ".har.zip"
+        ],
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "bytes",
         "frame": "isolated"
       }
     ]
   },
-  "author": {
-    "name": "Сергей Попов",
-    "url": "https://github.com/Sergei-Popov"
-  },
-  "repository": "https://github.com/Sergei-Popov/orca-har-viewer",
-  "license": "MIT"
+  "capabilities": []
 }
