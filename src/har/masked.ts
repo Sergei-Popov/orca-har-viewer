@@ -7,7 +7,7 @@ import { Zip, ZipDeflate, ZipPassThrough } from '../../vendor/fflate/fflate.mjs'
 import { isMediaType, type SideFiles } from './body'
 import { MASK } from './mask-text'
 import { isOauthUrl } from './mask-url'
-import { sanitizeSideFile, sanitizeSteps, type Counter, type SanitizeReport } from './sanitize'
+import { emptyReport, recordingIds, sanitizeSideFile, sanitizeSteps, type Counter, type SanitizeReport } from './sanitize'
 import type { Har, HarEntry } from './types'
 
 export type Masked = { har: Har; report: SanitizeReport; files?: SideFiles }
@@ -94,50 +94,58 @@ export function maskRecording(har: Har, files?: SideFiles): Masked {
   return runSteps(maskSteps(har, files))
 }
 
-/** `maskRecording` in steps: the entries first, then the body files. */
+/**
+ * `maskRecording` in steps: the body files first, then the entries, so identifiers the files'
+ * JSON keeps under their names (`"id": "ord_8f2a…"`) are known when the URLs are masked.
+ */
 export function* maskSteps(har: Har, files?: SideFiles): Steps<Masked> {
   const fileBytes = textFileBytes(har, files)
-  // Entries and body files share the progress by what there is of each.
-  const entryShare = files && fileBytes ? 0.3 : 1
-  const sanitize = sanitizeSteps(har)
+  // Body files and entries share the progress by what there is of each.
+  const fileShare = files && fileBytes ? 0.7 : 0
+  const report = emptyReport()
+  const ids = recordingIds(har)
+  const replaced = new Map<string, Uint8Array>()
+  if (files) {
+    const entries = Array.isArray(har.log.entries) ? har.log.entries : []
+    let done = 0
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]
+      const counter: Counter = {
+        add(kind, count = 1) {
+          report[kind] += count
+          report.total += count
+          report.entries.add(index)
+        },
+        ids
+      }
+      const oauth = typeof entry?.request?.url === 'string' && isOauthUrl(entry.request.url)
+      for (const ref of fileRefs(entry)) {
+        // Images, audio, video and fonts are never text, so they need not even be unpacked.
+        if (replaced.has(ref.name) || isMediaType(ref.mimeType) || !files.has(ref.name)) continue
+        const bytes = files.get(ref.name)
+        if (!bytes) continue
+        try {
+          const out = sanitizeSideFile(bytes, ref.mimeType, counter, { oauth })
+          if (out !== bytes) replaced.set(ref.name, out)
+        } catch {
+          // Never shown or saved unmasked: the file is replaced and the request reported.
+          replaced.set(ref.name, MASKED_FILE)
+          report.failed.add(index)
+          report.entries.add(index)
+        }
+        done += files.size?.(ref.name) ?? bytes.length
+        yield fileShare * Math.min(1, done / Math.max(1, fileBytes))
+      }
+    }
+  }
+  const sanitize = sanitizeSteps(har, { report, ids })
   let step = sanitize.next()
   while (!step.done) {
-    yield step.value * entryShare
+    yield fileShare + step.value * (1 - fileShare)
     step = sanitize.next()
   }
-  const { har: masked, report } = step.value
+  const masked = step.value.har
   if (!files) return { har: masked, report }
-  const replaced = new Map<string, Uint8Array>()
-  const entries = Array.isArray(har.log.entries) ? har.log.entries : []
-  let done = 0
-  for (let index = 0; index < entries.length; index++) {
-    const entry = entries[index]
-    const counter: Counter = {
-      add(kind, count = 1) {
-        report[kind] += count
-        report.total += count
-        report.entries.add(index)
-      }
-    }
-    const oauth = typeof entry?.request?.url === 'string' && isOauthUrl(entry.request.url)
-    for (const ref of fileRefs(entry)) {
-      // Images, audio, video and fonts are never text, so they need not even be unpacked.
-      if (replaced.has(ref.name) || isMediaType(ref.mimeType) || !files.has(ref.name)) continue
-      const bytes = files.get(ref.name)
-      if (!bytes) continue
-      try {
-        const out = sanitizeSideFile(bytes, ref.mimeType, counter, { oauth })
-        if (out !== bytes) replaced.set(ref.name, out)
-      } catch {
-        // Never shown or saved unmasked: the file is replaced and the request reported.
-        replaced.set(ref.name, MASKED_FILE)
-        report.failed.add(index)
-        report.entries.add(index)
-      }
-      done += files.size?.(ref.name) ?? bytes.length
-      yield entryShare + (1 - entryShare) * Math.min(1, done / Math.max(1, fileBytes))
-    }
-  }
   return {
     har: masked,
     report,
@@ -150,9 +158,19 @@ export function* maskSteps(har: Har, files?: SideFiles): Steps<Masked> {
   }
 }
 
-/** The masked HAR as text, two-space indented like the files browsers write. */
-export function maskedHarText(masked: Masked): string {
-  return JSON.stringify(masked.har, null, 2)
+/** The masked HAR as text: two-space indented like the files browsers write, or minified like its source. */
+export function maskedHarText(masked: Masked, compact = false): string {
+  return compact ? JSON.stringify(masked.har) : JSON.stringify(masked.har, null, 2)
+}
+
+/**
+ * The masked HAR as the bytes of a .har file: formatted like its source, and minified anyway when
+ * the indented text would be over `limit` (indenting nearly doubles a minified recording).
+ */
+export function maskedHarBytes(masked: Masked, compact: boolean, limit: number): Uint8Array {
+  const encoder = new TextEncoder()
+  const bytes = encoder.encode(maskedHarText(masked, compact))
+  return bytes.length > limit && !compact ? encoder.encode(maskedHarText(masked, true)) : bytes
 }
 
 /**
@@ -161,17 +179,17 @@ export function maskedHarText(masked: Masked): string {
  * that could not be unpacked (past the archive's unpack budget, too large or damaged): they could
  * not be masked.
  */
-export function maskedHarZip(masked: Masked): Uint8Array {
-  return runSteps(maskedHarZipSteps(masked))
+export function maskedHarZip(masked: Masked, compact = false): Uint8Array {
+  return runSteps(maskedHarZipSteps(masked, compact))
 }
 
 /** Bytes deflated between two progress reports. */
 const ZIP_SLICE = 1 << 20
 
 /** `maskedHarZip` in steps, file by file and a megabyte at a time. */
-export function* maskedHarZipSteps(masked: Masked): Steps<Uint8Array> {
+export function* maskedHarZipSteps(masked: Masked, compact = false): Steps<Uint8Array> {
   const contents: { name: string; bytes: Uint8Array; level: number }[] = [
-    { name: 'har.har', bytes: new TextEncoder().encode(maskedHarText(masked)), level: 6 }
+    { name: 'har.har', bytes: new TextEncoder().encode(maskedHarText(masked, compact)), level: 6 }
   ]
   if (masked.files) {
     const names = new Set(['har.har'])

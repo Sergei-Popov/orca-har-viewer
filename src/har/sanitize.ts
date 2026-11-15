@@ -11,7 +11,7 @@
 import { decodeBase64, encodeBase64, isTextBody } from './body'
 import { splitSetCookie } from './headers'
 import { maskBodyBytes, maskBodyText } from './mask-body'
-import { MASK, QUIET, isSensitiveName, maskText, type Counter, type MaskKind, type MaskOptions } from './mask-text'
+import { MASK, QUIET, collectIds, isIdName, isSensitiveName, maskText, type Counter, type MaskKind, type MaskOptions } from './mask-text'
 import { blankStrings, isOauthUrl, maskOtherFields, maskParams, maskStrings, maskUrl } from './mask-url'
 import type { Har, HarCookie, HarEntry, HarNameValue, HarPage, HarPostData, HarResponse, HarWebSocketMessage } from './types'
 
@@ -32,16 +32,46 @@ export function emptyReport(): SanitizeReport {
   return { total: 0, headers: 0, cookies: 0, query: 0, bodies: 0, other: 0, entries: new Set(), failed: new Set() }
 }
 
+/** Counts nothing, for values that repeat ones counted elsewhere, and knows the same identifiers. */
+function quietOf(counter: Counter): Counter {
+  return counter.ids ? { add: () => undefined, ids: counter.ids } : QUIET
+}
+
+/**
+ * The identifiers a recording's inline bodies keep under their JSON names (`"id": "ord_8f2a…"`),
+ * found before masking so a REST path met earlier in the file keeps them too (see `Counter.ids`).
+ */
+export function recordingIds(har: Har): Set<string> {
+  const ids = new Set<string>()
+  const entries: unknown[] = Array.isArray(har.log?.entries) ? har.log.entries : []
+  for (const entry of entries) {
+    try {
+      if (!entry || typeof entry !== 'object') continue
+      const { request, response } = entry as HarEntry
+      for (const holder of [request?.postData, response?.content]) {
+        if (!holder || typeof holder !== 'object' || holder.encoding === 'base64') continue
+        const text = holder.text
+        if (typeof text === 'string') collectIds(text, ids)
+      }
+    } catch {
+      // An entry this pass cannot read is reported by the masking that follows.
+    }
+  }
+  return ids
+}
+
 // ── Headers and cookies ──────────────────────────────────────────────────────────────────────
 
 const URL_HEADERS = new Set(['referer', 'location', 'content-location', 'origin', ':path', 'refresh'])
 
 /**
  * Headers whose random-looking values identify a request, a trace or a resource version, or
- * describe content (ETags, digests, CSP hashes, WebSocket handshakes): no catch-all on them.
+ * describe content (ETags, digests, CSP hashes, WebSocket handshakes, the multipart boundary in
+ * Content-Type, which must match the body): no catch-all on them. Headers named as identifiers
+ * (`X-Build`, `X-Commit`, `X-Amz-Version-Id`) are treated alike.
  */
 const ID_HEADER =
-  /request-?id|requestid|trace|span|correlation|^etag$|^if-(?:none-)?match$|^if-range$|^cf-ray$|digest|md5|hash|^sec-websocket-|content-security-policy|^x-served-by$|^via$|^server-timing$|^x-cache|^x-amz-id-2$|^x-amz-cf-id$|^x-vercel-id$|^x-amzn-requestid$|^nel$|^report-to$/
+  /^content-type$|request-?id|requestid|trace|span|correlation|^etag$|^if-(?:none-)?match$|^if-range$|^cf-ray$|digest|md5|hash|^sec-websocket-|content-security-policy|^x-served-by$|^via$|^server-timing$|^x-cache|^x-amz-id-2$|^x-amz-cf-id$|^x-vercel-id$|^x-amzn-requestid$|^nel$|^report-to$/
 
 export function maskHeaderValue(name: string, value: string, counter: Counter, options: MaskOptions = {}): string {
   const lower = name.toLowerCase()
@@ -55,14 +85,22 @@ export function maskHeaderValue(name: string, value: string, counter: Counter, o
     const space = value.indexOf(' ')
     return space > 0 && /^[A-Za-z-]+$/.test(value.slice(0, space)) ? `${value.slice(0, space)} ${MASK}` : MASK
   }
-  if (isSensitiveName(lower)) {
+  if (sensitiveHeader(lower)) {
     if (value === MASK || value.endsWith(` ${MASK}`)) return value
     counter.add('headers')
     return MASK
   }
   // `:path` repeats the request URL, which is counted already.
-  if (URL_HEADERS.has(lower)) return maskUrl(value, lower === ':path' ? QUIET : counter, 'headers', options)
-  return maskText(value, counter, 'headers', ID_HEADER.test(lower) ? { ...options, noEntropy: true } : options)
+  if (URL_HEADERS.has(lower)) return maskUrl(value, lower === ':path' ? quietOf(counter) : counter, 'headers', options)
+  return maskText(value, counter, 'headers', ID_HEADER.test(lower) || isIdName(name) ? { ...options, noEntropy: true } : options)
+}
+
+/**
+ * A header whose value is secret by its name. CORS headers say what a server allows
+ * (`Access-Control-Allow-Credentials: true`), never a secret, though their names hold such words.
+ */
+function sensitiveHeader(lower: string): boolean {
+  return isSensitiveName(lower) && !lower.startsWith('access-control-')
 }
 
 /** `a=1; b=2` → `a=[masked]; b=[masked]`; a value without a name (`Cookie: abc`) is masked too. */
@@ -118,7 +156,7 @@ function maskHeaders(headers: HarNameValue[] | undefined, counter: Counter, opti
     } else if (header.value !== undefined) {
       // A value of another type (an array of values, a number): its strings, all of them for a credential.
       const lower = name.toLowerCase()
-      const value = CREDENTIAL_HEADERS.has(lower) || isSensitiveName(lower) ? blankStrings(header.value, counter, 'headers') : maskStrings(header.value, counter, 'headers')
+      const value = CREDENTIAL_HEADERS.has(lower) || sensitiveHeader(lower) ? blankStrings(header.value, counter, 'headers') : maskStrings(header.value, counter, 'headers')
       if (value !== header.value) next = { ...header, value: value as string }
     }
     next = maskOtherFields(next, ['name', 'value'], counter)
@@ -193,7 +231,7 @@ export function sanitizeSideFile(bytes: Uint8Array, mimeType: string, counter: C
 function maskPostData(post: HarPostData | undefined, counter: Counter, options: MaskOptions): HarPostData | undefined {
   if (!post || typeof post !== 'object') return post === undefined ? post : (maskStrings(post, counter, 'bodies') as HarPostData)
   // The fields repeat the text when both are there: the text counts.
-  const params = maskParams(post.params as HarNameValue[] | undefined, typeof post.text === 'string' ? QUIET : counter, 'bodies', options)
+  const params = maskParams(post.params as HarNameValue[] | undefined, typeof post.text === 'string' ? quietOf(counter) : counter, 'bodies', options)
   const withText = maskInlineBody(post, counter, options) ?? post
   return params === post.params ? withText : { ...withText, params: params as HarPostData['params'] }
 }
@@ -237,7 +275,7 @@ export function sanitizeEntry(entry: HarEntry, counter: Counter): HarEntry {
         if (field === 'headers') return maskHeaders(item as HarNameValue[], counter, options)
         if (field === 'cookies') return maskCookies(item as HarCookie[], counter)
         // Mirrors the URL, which is counted already.
-        if (field === 'queryString') return maskParams(item as HarNameValue[], QUIET, 'query', options)
+        if (field === 'queryString') return maskParams(item as HarNameValue[], quietOf(counter), 'query', options)
         if (field === 'postData') return maskPostData(item as HarPostData, counter, options)
         return undefined
       }, counter)
@@ -337,17 +375,22 @@ const STEP_ENTRIES = 64
 
 /**
  * `sanitizeHar` in steps: yields the share of entries done (0 to 1) every few entries, so a caller
- * can let the page paint and show progress; returns the masked copy and the report.
+ * can let the page paint and show progress; returns the masked copy and the report. A caller that
+ * masked body files first passes its report and the identifiers those files kept.
  */
-export function* sanitizeSteps(har: Har): Generator<number, { har: Har; report: SanitizeReport }> {
-  const report = emptyReport()
+export function* sanitizeSteps(
+  har: Har,
+  context: { report?: SanitizeReport; ids?: Set<string> } = {}
+): Generator<number, { har: Har; report: SanitizeReport }> {
+  const report = context.report ?? emptyReport()
   let current = -1
   const counter: Counter = {
     add(kind, count = 1) {
       report[kind] += count
       report.total += count
       if (current >= 0) report.entries.add(current)
-    }
+    },
+    ids: context.ids ?? recordingIds(har)
   }
   const source = Array.isArray(har.log.entries) ? har.log.entries : []
   const entries: HarEntry[] = []

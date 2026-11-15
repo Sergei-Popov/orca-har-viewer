@@ -11,6 +11,7 @@ import {
   hasOauthNames,
   isIdName,
   isSecretName,
+  maskJsonValue,
   maskRandom,
   maskText,
   maskTokens,
@@ -131,8 +132,8 @@ export function looksLikeUrl(text: string): boolean {
 
 /**
  * The nested-value masker for `maskValue`: decodes a value as many times as it was encoded
- * (`%252Freset%253Ftoken%253D…` twice; each pass counts as a level of nesting), masks it as a URL
- * when it is one, else as text (where `name=value` pairs are found by name), and encodes it back
+ * (`%252Freset%253Ftoken%253D…` twice; each pass counts as a level of nesting), masks it as JSON
+ * when it is a JSON object or array, as a URL when it is one, else as text (where `name=value` pairs are found by name), and encodes it back
  * the way it came.
  */
 function maskNested(value: string, counter: Counter, kind: MaskKind, options: MaskOptions): string {
@@ -149,7 +150,9 @@ function maskNested(value: string, counter: Counter, kind: MaskKind, options: Ma
   const decoded = layers[layers.length - 1]
   const inner: MaskOptions = { ...options, depth }
   let masked: string
-  if (looksLikeUrl(decoded) || (decoded.includes('?') && !/\s/.test(decoded))) masked = maskUrl(decoded, counter, kind, inner)
+  const json = maskJsonValue(decoded, counter, kind, inner)
+  if (json !== null) masked = json
+  else if (looksLikeUrl(decoded) || (decoded.includes('?') && !/\s/.test(decoded))) masked = maskUrl(decoded, counter, kind, inner)
   else if (decoded.includes('=')) masked = maskText(decoded, counter, kind, inner)
   else {
     masked = maskTokens(decoded, counter, kind)

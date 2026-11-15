@@ -241,7 +241,11 @@ function tokenizeMarkup(text: string): Token[] {
     // Script and style bodies stay plain text up to their closing tag.
     const name = /^<([\w-]+)/.exec(text.slice(lt, lt + 16))?.[1]?.toLowerCase()
     if (name === 'script' || name === 'style') {
-      const close = text.toLowerCase().indexOf(`</${name}`, j)
+      // A case-insensitive search from here: lowercasing the whole text per tag was quadratic, and
+      // its offsets drift where a character lowercases to more than one (İ).
+      const closing = name === 'script' ? CLOSE_SCRIPT : CLOSE_STYLE
+      closing.lastIndex = j
+      const close = closing.exec(text)?.index ?? -1
       const stop = close < 0 ? n : close
       if (stop > j) for (const [kind, part] of (name === 'script' ? tokenizeJs : tokenizeCss)(text.slice(j, stop))) out.push(kind, part)
       i = stop
@@ -249,6 +253,9 @@ function tokenizeMarkup(text: string): Token[] {
   }
   return out.tokens
 }
+
+const CLOSE_SCRIPT = /<\/script/gi
+const CLOSE_STYLE = /<\/style/gi
 
 /** Splits tokens into lines, each a list of tokens. */
 export function splitLines(tokens: Token[]): Token[][] {

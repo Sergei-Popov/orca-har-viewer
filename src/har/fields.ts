@@ -3,7 +3,7 @@
 // Chrome writes them encoded, Firefox and Playwright decoded, so neither list can be decoded
 // safely. The URL and the urlencoded body text are the same in every recorder.
 
-import { baseMime } from './body'
+import { baseMime, requestBody, type SideFiles } from './body'
 import { isFormShaped } from './mask-body'
 import type { HarEntry } from './types'
 
@@ -35,17 +35,24 @@ export function queryFields(raw: HarEntry, url: string): Fields {
 }
 
 /**
- * Form fields: from the body text when it is urlencoded (decoded once), else the HAR's `params`
- * as written (multipart fields, or Playwright's fields of a body kept in a separate file). Null
- * when the body is not a form.
+ * Form fields: from the body text when it is urlencoded (decoded once), the body file's text when
+ * the HAR keeps it in a separate one (Playwright's `content: 'attach'` writes an empty `text`, and
+ * no `params` when the type has a charset), else the HAR's `params` as written (multipart fields).
+ * Null when the body is not a form.
  */
-export function formFields(raw: HarEntry): Fields | null {
+export function formFields(raw: HarEntry, files?: SideFiles): Fields | null {
   const post = raw.request?.postData
   if (!post || typeof post !== 'object') return null
   const mime = typeof post.mimeType === 'string' ? baseMime(post.mimeType) : ''
-  if (typeof post.text === 'string' && post.text && (mime === 'application/x-www-form-urlencoded' || (!mime && isFormShaped(post.text)))) {
+  const isForm = (body: string) => mime === 'application/x-www-form-urlencoded' || (!mime && isFormShaped(body))
+  let body = typeof post.text === 'string' ? post.text : ''
+  if (!body && typeof post._file === 'string' && post._file && files) {
+    const read = requestBody(raw, files)
+    if (read.kind === 'text') body = read.text
+  }
+  if (body && isForm(body)) {
     const out: Fields = []
-    new URLSearchParams(post.text).forEach((value, name) => out.push([name, value]))
+    new URLSearchParams(body).forEach((value, name) => out.push([name, value]))
     return out
   }
   if (!Array.isArray(post.params) || !post.params.length) return null

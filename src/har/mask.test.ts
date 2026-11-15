@@ -80,7 +80,7 @@ test('review 1, 21: base64 text bodies are masked whatever their MIME type, and 
   // A request body with no type.
   const post = har(entry({ request: { method: 'POST', url: 'https://api.example.com/x', postData: { mimeType: '', encoding: 'base64', text: b64('{"password":"REQB64NOMIME"}') } } }))
   const masked = sanitizeHar(post).har.log.entries![0]
-  assert.ok(!toCurl(masked).includes('REQB64NOMIME'))
+  assert.ok(!toCurl(masked)!.includes('REQB64NOMIME'))
   // Binary stays byte for byte.
   const binary = new Uint8Array([0, 1, 2, 3, 0xff, 0x10, 0x41, 0x4b, 0x49, 0x41])
   const bin = har(entry({ response: response({ mimeType: 'application/octet-stream', encoding: 'base64', text: encodeBase64(binary) }) }))
@@ -192,7 +192,7 @@ test('review 3: multipart/form-data parts are masked by name, everything else ke
     const input = har(entry({ request: { method: 'POST', url: 'https://app.example.com/api/login', postData: { mimeType, text: body, params } } }))
     const masked = sanitizeHar(input).har
     const e = masked.log.entries![0]
-    for (const text of [toCurl(e), toFetch(e), buildDigest(buildModel(masked), buildModel(masked).entries, { title: 't', bodies: true }), maskedHarText(maskRecording(input))]) {
+    for (const text of [toCurl(e)!, toFetch(e)!, buildDigest(buildModel(masked), buildModel(masked).entries, { title: 't', bodies: true }), maskedHarText(maskRecording(input))]) {
       assert.ok(!text.includes('Hunter2Secret!') && !text.includes('CSRFVALUE123'))
     }
   }
@@ -289,7 +289,7 @@ test('review 10: OAuth and SAML credentials in forms, form_post HTML and redirec
   )
   const e = sanitizeHar(token).har.log.entries![0]
   assert.equal(e.request!.postData!.text, `grant_type=authorization_code&code=${MASK}&code_verifier=${MASK}&client_id=demo`)
-  assert.ok(!toCurl(e).includes('FORMCODEval'))
+  assert.ok(!toCurl(e)!.includes('FORMCODEval'))
   // A token exchange posted to a path that says nothing: the fields tell.
   assert.equal(maskBodyText('grant_type=authorization_code&code=PLAINPATHCODE1', 'application/x-www-form-urlencoded', counter()), `grant_type=authorization_code&code=${MASK}`)
   const html = '<form method="post" action="https://app.example.com/cb"><input type="hidden" name="code" value="HTMLFORMPOSTCODEval"/><input type="hidden" name="state" value="st"/></form>'

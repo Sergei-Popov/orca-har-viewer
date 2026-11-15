@@ -74,7 +74,10 @@ largest request, and the number of domains.
 
 ## For agents
 
-- **Copy as cURL** and **Copy as fetch** for one request.
+- **Copy as cURL** and **Copy as fetch** for one request. Every value goes to curl as an
+  option's argument, header names that are not HTTP tokens are left out, and a request with line
+  breaks or other control characters in its URL, method or headers is not copied, so a crafted
+  file cannot make a pasted command do something else.
 - **Export for agent** builds a compact Markdown digest of the selected requests, the failed
   ones, or the ones in the list (at most 100): method, URL, status, timing, sizes, the
   initiator, the request headers worth reading, and bodies cut to 2,000 characters (JSON
@@ -85,17 +88,20 @@ largest request, and the number of domains.
 **Mask secrets** replaces values that match known secret patterns with `[masked]` in the view,
 in copied cURL and fetch commands, and in exports, and a banner says how many values in how many
 requests were masked. **Save sanitized…** writes a masked copy of the file (`.har`, or
-`.har.zip` for a `.har.zip`). What counts as a secret:
+`.har.zip` for a `.har.zip`; minified when the file was). What counts as a secret:
 
 - `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie` values, including several
   cookies folded into one `Set-Cookie` with `, ` and cookies without a name (cookie names, the
-  auth scheme and cookie attributes stay), and headers named like `X-Api-Key` or `X-Auth-Token`;
+  auth scheme and cookie attributes stay), and headers named like `X-Api-Key` or `X-Auth-Token`
+  (`Access-Control-*` headers, which say what a server allows, stay);
 - query parameters (in the URL, its fragment and hash routes such as `#/callback?code=…`, and in
   the HAR's query string list), form fields (urlencoded, multipart and plain-text forms), JSON
   keys, `name: value` and `name=value` lines (YAML, `.properties`, STOMP headers) and HTML
   `meta`/`input` values, quoted or not, named like `token`, `password`, `secret`, `api_key`,
   `session`, `csrf`, `signature`, `passcode`, `otp`, `device_code`, `mfa_code` and similar,
   SAML and WS-Federation messages and PKCE code verifiers;
+- JSON inside a query value or a form field (`?variables={"password":…}`), masked by key name as
+  a JSON body is;
 - everything inside a secret-named JSON object, its keys included
   (`{"sessions": {"<id>": {…}}}`);
 - OAuth `code` and CAS `ticket` wherever the request shows a sign-in flow: a sign-in, auth or
@@ -126,7 +132,9 @@ UUIDs; `sha256-`/`sha384-`/`sha512-` integrity hashes; `data:` base64 payloads; 
 file and host names (`main.3f9ac1….js`); static asset paths (`/_next/`, `/static/`, `/assets/`
 and script, style, font, image and media files); 24- and 40-digit hex path segments (object IDs,
 git commits); values named as identifiers (`id`, `requestId`, `etag`, `hash`, `version`, `build`
-…); `ETag`, request, trace and correlation ID headers, `traceparent`, CSP and digest headers,
+…), in headers too (`X-Build`, `X-Commit`), and the same value wherever else it appears (an order
+ID the JSON keeps under `id` stays in `/orders/<id>`); the multipart boundary in `Content-Type`,
+which must match the body; `ETag`, request, trace and correlation ID headers, `traceparent`, CSP and digest headers,
 `Server-Timing`; and JavaScript and CSS bodies, so code is never rewritten. Long base64 data
 under an ordinary name (an inline image in JSON) counts as random and is masked.
 
