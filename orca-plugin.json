@@ -1,32 +1,79 @@
 {
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
   "manifestVersion": 2,
+  "execution": "sandboxed-ui",
   "id": "har-viewer",
   "name": "HAR Viewer",
   "version": "0.1.0",
-  "description": "Opens HTTP Archive (.har) files from browsers, Playwright and agents as a DevTools-style network log: request list with a waterfall, filters, headers, bodies and timings, plus an export with secrets removed. Offline.",
+  "description": "HTTP Archive files in Orca's editor tabs: opens .har recordings from browsers and agents, and .har.zip from Playwright, as a network log with a fast request list and waterfall, filters by text, type, errors, page and domain, and the headers, payload, response (JSON tree, highlighted source, images and media), cookies, timing, WebSocket messages and initiator of each request. Copy a request as cURL or fetch, export a Markdown digest for coding agents, or save a copy with tokens, cookies and keys masked. Works offline and never edits the file. Independent; not affiliated with Playwright or any browser maker.",
+  "author": {
+    "name": "Sergei Popov",
+    "url": "https://github.com/Sergei-Popov"
+  },
+  "repository": "https://github.com/Sergei-Popov/orca-har-viewer",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "cover": {
+    "path": "images/cover.png",
+    "alt": "A demo recording in HAR Viewer with the dark theme: the request list and waterfall, and a failed POST request with its headers on the right."
+  },
+  "screenshots": [
+    {
+      "path": "images/filters-light.png",
+      "alt": "The light theme with the Errors filter and the Fetch/XHR chip on: four failed requests, and an overview of their status codes, domains and errors.",
+      "caption": "Filter by type, errors, page, domain or text, and see totals at a glance.",
+      "theme": "light"
+    },
+    {
+      "path": "images/response-dark.png",
+      "alt": "A JSON response as a collapsible tree with the dark theme, next to the request list and waterfall.",
+      "caption": "JSON responses as a tree, other bodies as highlighted source, images, media or hex.",
+      "theme": "dark"
+    },
+    {
+      "path": "images/timing-light.png",
+      "alt": "The Timing tab with the light theme: connection setup, waiting and download bars, and Server-Timing metrics for a slow request.",
+      "caption": "Where a request spent its time, including the server’s own Server-Timing.",
+      "theme": "light"
+    },
+    {
+      "path": "images/sanitize-dark.png",
+      "alt": "Secrets masked in the request list and headers with the dark theme, and the Export for agent popover with a Markdown digest.",
+      "caption": "Mask tokens and cookies, and export a Markdown digest for a coding agent.",
+      "theme": "dark"
+    }
+  ],
   "engines": {
     "orca": ">=1.4.248"
   },
-  "execution": "sandboxed-ui",
   "pluginApi": 1,
   "contributes": {
     "customEditors": [
       {
-        "id": "har-viewer",
+        "id": "har",
         "title": "HAR Viewer",
+        "icon": "icons/har.png",
         "extensions": [
-          ".har-viewer"
+          ".har"
         ],
-        "entry": "editor/main.ts",
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "text",
+        "frame": "isolated"
+      },
+      {
+        "id": "har-zip",
+        "title": "HAR Viewer",
+        "icon": "icons/har.png",
+        "extensions": [
+          ".har.zip"
+        ],
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "bytes",
         "frame": "isolated"
       }
     ]
   },
-  "author": {
-    "name": "Сергей Попов",
-    "url": "https://github.com/Sergei-Popov"
-  },
-  "repository": "https://github.com/Sergei-Popov/orca-har-viewer",
-  "license": "MIT"
+  "capabilities": []
 }
