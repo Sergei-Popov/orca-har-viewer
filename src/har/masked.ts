@@ -127,12 +127,13 @@ export function* maskSteps(har: Har, files?: SideFiles): Steps<Masked> {
     let read = 0
     const seen = new Set<string>()
     for (const entry of entries) {
+      const oauth = typeof entry?.request?.url === 'string' && isOauthUrl(entry.request.url)
       for (const ref of fileRefs(entry)) {
         if (seen.has(ref.name) || isMediaType(ref.mimeType) || !files.has(ref.name)) continue
         seen.add(ref.name)
         try {
           const bytes = files.get(ref.name)
-          if (bytes && looksLikeJson(bytes, ref.mimeType)) collectJsonFacts(decodeText(bytes, charsetOf(ref.mimeType)), facts)
+          if (bytes && looksLikeJson(bytes, ref.mimeType)) collectJsonFacts(decodeText(bytes, charsetOf(ref.mimeType)), facts, { oauth })
         } catch {
           // A file this pass cannot read is replaced and reported by the masking that follows.
         }

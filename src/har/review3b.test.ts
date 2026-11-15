@@ -1,4 +1,5 @@
-// Regression tests for the masking re-check of round 3 (VERIFY.md, items in the test names).
+// Regression tests for the masking re-checks of round 3 (VERIFY.md as 're-check', VERIFY-3b.md as
+// 'final', items in the test names).
 // Every fixture is built here from obviously fake values.
 
 import { assert, test } from 'orca/testing'
@@ -6,7 +7,7 @@ import type { SideFiles } from './body'
 import { toCurl, toFetch } from './copy'
 import { buildDigest } from './digest'
 import { formFields, queryFields } from './fields'
-import { isIdName } from './mask-text'
+import { isIdName, isSensitiveName } from './mask-text'
 import { maskRecording } from './masked'
 import { buildModel } from './model'
 import { MASK, maskHeaderValue, maskUrl, sanitizeHar, type Counter } from './sanitize'
@@ -184,4 +185,109 @@ test('re-check 6: in a .har.zip, an ID one body file names keeps another file th
   // The same recording with inline bodies masks alike.
   const inline = sanitizeHar(har(json('https://api.example.com/a', { lastOrder: ORDER }), json('https://api.example.com/b', { id: ORDER }))).har
   assert.equal(inline.log.entries![0].response?.content?.text, JSON.stringify({ lastOrder: ORDER }))
+})
+
+// A hex HMAC, an MD5 and a SHA-256: random to the catch-all, kept under `hash` as identifiers.
+const HMAC = ['9f86d081884c7d65', '9a2feaa0c55ad015', 'a3bf4f1b2b0b822c', 'd15d6c15b0f00a08'].join('')
+const MD5 = ['e2fc714c4727ee93', '95f324cd2e7f331f'].join('')
+
+test('final 1: Telegram\'s login hash is a secret beside auth_date and on sign-in routes, an identifier elsewhere', () => {
+  const data = `id=123456789&first_name=Ann&username=ann&auth_date=1731660000&hash=${HMAC}`
+  // The Login Widget callback, and the same data on a path that names no sign-in.
+  for (const path of ['/auth/telegram', '/api/tg/widget-data']) {
+    const entry: HarEntry = {
+      request: { method: 'GET', url: `https://app.example.com${path}?${data}`, headers: [], queryString: data.split('&').map((pair) => ({ name: pair.split('=')[0], value: pair.split('=')[1] })) },
+      response: { status: 302, headers: [] }
+    }
+    const out = sanitizeHar(har(entry)).har
+    assert.ok(!shown(out).includes(HMAC), path)
+    assert.ok(out.log.entries![0].request?.url?.includes('id=123456789&first_name=Ann'))
+  }
+  // Mini App initData: in a header, in a JSON string, and as JSON fields beside auth_date.
+  const initData = `query_id=AAHdF6IQAAAAAN0XohDhrOrc&user=%7B%22id%22%3A123456789%7D&auth_date=1731660000&hash=${HMAC}`
+  assert.ok(!maskHeaderValue('X-Telegram-Init-Data', initData, counter()).includes(HMAC))
+  const bodies = [{ initData }, { id: 123456789, first_name: 'Ann', auth_date: 1731660000, hash: HMAC }]
+  for (const body of bodies) assert.ok(!shown(sanitizeHar(har(json('https://app.example.com/api/me', body))).har).includes(HMAC), JSON.stringify(body))
+  // An e-mail verification link.
+  assert.equal(maskUrl(`https://example.com/verify.php?email=ann%40example.com&hash=${MD5}`, counter()), `https://example.com/verify.php?email=ann%40example.com&hash=${MASK}`)
+  assert.equal(maskUrl(`https://example.com/account/confirm?hash=${MD5}`, counter()), `https://example.com/account/confirm?hash=${MASK}`)
+  // Elsewhere a hash identifies content and stays: on files, presets, and files a reset page loads.
+  for (const url of [`https://api.example.com/files?hash=${HMAC}`, `https://api.example.com/v1/presets?hash=${MD5}`, `https://example.com/css/reset.css?hash=${MD5}`]) {
+    assert.equal(maskUrl(url, counter()), url)
+  }
+  // A sign-in page served as a static file is still a sign-in step.
+  assert.equal(maskUrl(`https://app.example.com/static/callback.html?code=${MD5}`, counter()), `https://app.example.com/static/callback.html?code=${MASK}`)
+  const file = sanitizeHar(har(json('https://api.example.com/upload', { hash: HMAC, size: 3 }))).har
+  assert.equal(file.log.entries![0].response?.content?.text, JSON.stringify({ hash: HMAC, size: 3 }))
+})
+
+test('final 2: a value the recording sends as a credential is never kept as an identifier', () => {
+  const list = json('https://api.example.com/api/sessions', [{ id: V, device: 'laptop' }])
+  const uses: HarEntry[] = [
+    { request: { method: 'DELETE', url: `https://api.example.com/api/sessions/${V}`, headers: [{ name: 'Cookie', value: `auth_session=${V}` }] }, response: { status: 204, headers: [] } },
+    { request: { method: 'GET', url: 'https://api.example.com/api/me', headers: [] }, response: { status: 200, headers: [{ name: 'Set-Cookie', value: `auth_session=${V}; Path=/; HttpOnly` }] } },
+    { request: { method: 'GET', url: 'https://api.example.com/api/a', headers: [{ name: 'Authorization', value: `Bearer ${V}` }] }, response: { status: 200, headers: [] } },
+    get(`https://api.example.com/api/b?access_token=${V}`),
+    json('https://api.example.com/api/c', { refresh_token: V })
+  ]
+  // Each credential use alone vetoes the identifier, with the list first or last.
+  for (const use of uses) {
+    for (const input of [har(list, use, get(`https://api.example.com/api/sessions/${V}/devices`)), har(get(`https://api.example.com/api/sessions/${V}/devices`), use, list)]) {
+      assert.ok(!shown(sanitizeHar(input).har).includes(V), JSON.stringify(use.request))
+    }
+  }
+  // A session object's own data is masked there, not everywhere: only its random values are credentials.
+  const email = 'ann.smith@example.com'
+  const profile = sanitizeHar(har(json('https://api.example.com/api/session', { session: { token: V, user: { email } } }), json('https://api.example.com/api/profile', { email }))).har
+  assert.equal(profile.log.entries![1].response?.content?.text, JSON.stringify({ email }))
+  assert.ok(!shown(profile).includes(V))
+  // Without a credential use, the session listed under `id` is an identifier like any other.
+  const plain = sanitizeHar(har(get(`https://api.example.com/api/sessions/${V}/devices`), list)).har
+  assert.equal(plain.log.entries![0].request?.url, `https://api.example.com/api/sessions/${V}/devices`)
+})
+
+test('final 3: the body\'s mimeType fields keep the boundary and charset only, counted once with the header', () => {
+  const random = 'Zk3qP9vX2mL7tR4wB8nC5yH1aQ6'
+  const type = `application/octet-stream; nonce=${random}`
+  const entry: HarEntry = {
+    request: { method: 'POST', url: 'https://api.example.com/up', headers: [{ name: 'Content-Type', value: type }], postData: { mimeType: type, text: 'hello' } },
+    response: { status: 200, headers: [{ name: 'Content-Type', value: type }], content: { mimeType: type, size: 5, text: 'hello' } }
+  }
+  const { har: out, report } = sanitizeHar(har(entry))
+  assert.ok(!shown(out).includes(random))
+  assert.equal(out.log.entries![0].request?.postData?.mimeType, `application/octet-stream; nonce=${MASK}`)
+  assert.equal(out.log.entries![0].response?.content?.mimeType, `application/octet-stream; nonce=${MASK}`)
+  assert.equal(report.total, 2)
+  const multipart = 'multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW'
+  const upload = sanitizeHar(har({ request: { method: 'POST', url: 'https://api.example.com/up', headers: [], postData: { mimeType: multipart, text: '' } }, response: { status: 200, headers: [], content: { mimeType: 'text/html; charset=utf-8', size: 0 } } })).har
+  assert.equal(upload.log.entries![0].request?.postData?.mimeType, multipart)
+  assert.equal(upload.log.entries![0].response?.content?.mimeType, 'text/html; charset=utf-8')
+})
+
+test('final 4: identifier headers still give way to a credential word before hash or digest', () => {
+  const random = 'Zk3qP9vX2mL7tR4wB8nC5yH1aQ6'
+  for (const name of ['X-Auth-Hash', 'X-Pin-Hash', 'X-Auth-Digest', 'X-Mfa-Request-Id']) assert.equal(maskHeaderValue(name, random, counter()), MASK, name)
+  for (const name of ['X-Content-Hash', 'Digest', 'X-Request-Id', 'X-Amz-Request-Id', 'ETag']) assert.equal(maskHeaderValue(name, random, counter()), random, name)
+})
+
+test('final 5: "sid" makes a name secret as a word, never inside one', () => {
+  for (const name of ['addressId', 'address_id', 'shippingAddressId', 'billing_address_id', 'processId', 'classId']) {
+    assert.equal(isSensitiveName(name), false, name)
+    assert.equal(isIdName(name), true, name)
+  }
+  for (const name of ['sid', 'connect.sid', 'userSid', 'user_sid', 'PHPSESSID', 'JSESSIONID', 'APISID', 'SAPISID', '__Secure-3PSID']) assert.equal(isSensitiveName(name), true, name)
+  const out = sanitizeHar(har(json('https://api.example.com/checkout', { addressId: 48213, shippingAddressId: 'addr_7Hq2Lm9Np4Rs8Tv1Wx3Yz' }), get('https://api.example.com/addresses?addressId=48213'))).har
+  assert.equal(out.log.entries![0].response?.content?.text, JSON.stringify({ addressId: 48213, shippingAddressId: 'addr_7Hq2Lm9Np4Rs8Tv1Wx3Yz' }))
+  assert.equal(out.log.entries![1].request?.url, 'https://api.example.com/addresses?addressId=48213')
+})
+
+test('final 6: the pre-pass treats ticket and code as secrets only in a sign-in flow, as the body masker does', () => {
+  const path = get(`https://api.example.com/v1/tickets/${ORDER}`)
+  const support = json('https://api.example.com/v1/tickets', { ticket: { id: ORDER, subject: 'Refund' } })
+  for (const input of [har(path, support), har(support, path)]) {
+    assert.equal(sanitizeHar(input).har.log.entries!.find((e) => e.request?.method === 'GET')?.request?.url, `https://api.example.com/v1/tickets/${ORDER}`)
+  }
+  // In a sign-in flow (CAS), the ticket object is a secret, so its id is never kept.
+  const cas = json('https://sso.example.com/cas/serviceValidate', { ticket: { id: ORDER } })
+  for (const input of [har(path, cas), har(cas, path)]) assert.ok(!shown(sanitizeHar(input).har).includes(ORDER))
 })

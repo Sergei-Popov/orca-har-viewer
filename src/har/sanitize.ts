@@ -8,10 +8,10 @@
 // The layers: mask-text.ts (names, token shapes, free text), mask-url.ts (URLs, parameter lists,
 // free-text fields), mask-body.ts (JSON in place, forms, multipart, frames, byte bodies).
 
-import { decodeBase64, encodeBase64, isTextBody } from './body'
+import { baseMime, decodeBase64, encodeBase64, isTextBody } from './body'
 import { splitSetCookie } from './headers'
 import { collectJsonFacts, maskBodyBytes, maskBodyText } from './mask-body'
-import { MASK, emptyFacts, isIdName, isSensitiveName, maskText, quietOf, type Counter, type MaskKind, type MaskOptions, type RecordingFacts } from './mask-text'
+import { MASK, MAX_IDS, emptyFacts, hasCredentialWord, isIdName, isSecretName, isSensitiveName, maskText, quietOf, safeDecode, type Counter, type MaskKind, type MaskOptions, type RecordingFacts } from './mask-text'
 import { blankStrings, isHubUrl, isOauthUrl, maskOtherFields, maskParams, maskStrings, maskUrl, negotiatedHub } from './mask-url'
 import type { Har, HarCookie, HarEntry, HarNameValue, HarPage, HarPostData, HarResponse, HarWebSocketMessage } from './types'
 
@@ -44,21 +44,65 @@ export function recordingFacts(har: Har, facts: RecordingFacts = emptyFacts()): 
     try {
       if (!entry || typeof entry !== 'object') continue
       const { request, response } = entry as HarEntry
-      const url = request?.url
-      if (typeof url === 'string') {
-        const hub = negotiatedHub(url)
-        if (hub) facts.hubs.add(hub)
-      }
+      const url = typeof request?.url === 'string' ? request.url : ''
+      const hub = negotiatedHub(url)
+      if (hub) facts.hubs.add(hub)
+      const oauth = isOauthUrl(url)
+      noteCredentials(entry as HarEntry, url, oauth, facts)
       for (const holder of [request?.postData, response?.content]) {
         if (!holder || typeof holder !== 'object' || holder.encoding === 'base64') continue
         const text = holder.text
-        if (typeof text === 'string') collectJsonFacts(text, facts)
+        if (typeof text === 'string') collectJsonFacts(text, facts, { oauth })
       }
     } catch {
       // An entry this pass cannot read is reported by the masking that follows.
     }
   }
   return facts
+}
+
+/**
+ * Values an entry uses as credentials, into `facts.credentials`: cookie values, `Authorization`
+ * and other secret headers, and secret-named query and form values. Short ones (under 16
+ * characters) never look like identifiers, so they are left out.
+ */
+function noteCredentials(entry: HarEntry, url: string, oauth: boolean, facts: RecordingFacts): void {
+  const add = (value: unknown) => {
+    if (typeof value !== 'string') return
+    const trimmed = value.trim().replace(/^"(.*)"$/, '$1')
+    if (trimmed.length < 16 || trimmed.length > 4096 || facts.credentials.size >= MAX_IDS) return
+    facts.credentials.add(trimmed)
+    const decoded = safeDecode(trimmed)
+    if (decoded !== trimmed) facts.credentials.add(decoded)
+  }
+  const cookieValue = (pair: string) => add(pair.slice(pair.indexOf('=') + 1))
+  for (const list of [entry.request?.headers, entry.response?.headers]) {
+    if (!Array.isArray(list)) continue
+    for (const header of list) {
+      if (!header || typeof header.name !== 'string' || typeof header.value !== 'string') continue
+      const lower = header.name.toLowerCase()
+      if (lower === 'cookie') header.value.split(';').forEach(cookieValue)
+      else if (lower === 'set-cookie') for (const line of header.value.split('\n')) for (const one of splitSetCookie(line)) cookieValue(one.split(';')[0])
+      else if (lower === 'authorization' || lower === 'proxy-authorization') add(header.value.slice(header.value.indexOf(' ') + 1))
+      else if (sensitiveHeader(lower)) add(header.value)
+    }
+  }
+  for (const list of [entry.request?.cookies, entry.response?.cookies]) {
+    if (Array.isArray(list)) for (const cookie of list) if (cookie && typeof cookie === 'object') add(cookie.value)
+  }
+  const named = (name: unknown, value: unknown) => {
+    if (typeof name === 'string' && isSecretName(safeDecode(name), { oauth })) add(typeof value === 'string' ? safeDecode(value) : value)
+  }
+  const query = url.indexOf('?')
+  if (query >= 0) for (const pair of url.slice(query + 1).split(/[&#]/)) named(pair.slice(0, Math.max(0, pair.indexOf('='))), pair.slice(pair.indexOf('=') + 1))
+  const post = entry.request?.postData
+  if (post && typeof post === 'object') {
+    if (Array.isArray(post.params)) for (const param of post.params) if (param && typeof param === 'object') named(param.name, param.value)
+    if (typeof post.mimeType === 'string' && baseMime(post.mimeType) === 'application/x-www-form-urlencoded') {
+      const text = post.text
+      if (typeof text === 'string') for (const pair of text.split('&')) named(pair.slice(0, Math.max(0, pair.indexOf('='))), pair.slice(pair.indexOf('=') + 1))
+    }
+  }
 }
 
 // ── Headers and cookies ──────────────────────────────────────────────────────────────────────
@@ -93,7 +137,9 @@ export function maskHeaderValue(name: string, value: string, counter: Counter, o
   // `:path` repeats the request URL, which is counted already.
   if (URL_HEADERS.has(lower)) return maskUrl(value, lower === ':path' ? quietOf(counter) : counter, 'headers', options)
   if (lower === 'content-type') return maskContentType(value, counter, options)
-  return maskText(value, counter, 'headers', ID_HEADER.test(lower) || isIdName(name) ? { ...options, noEntropy: true } : options)
+  // An identifier's header, unless a credential word comes first (`X-Auth-Hash`, `X-Pin-Digest`).
+  const id = (ID_HEADER.test(lower) && !hasCredentialWord(name)) || isIdName(name)
+  return maskText(value, counter, 'headers', id ? { ...options, noEntropy: true } : options)
 }
 
 /**
@@ -231,6 +277,11 @@ function maskInlineBody<T extends { text?: string; encoding?: string; mimeType?:
       }
     } else text = maskBodyText(holder.text, mimeType, counter, 'bodies', options)
     if (text !== holder.text) out = { ...holder, text }
+  }
+  if (typeof holder.mimeType === 'string' && holder.mimeType) {
+    // The Content-Type header again, counted there: its boundary and charset stay.
+    const mimeType = maskContentType(holder.mimeType, quietOf(counter), options)
+    if (mimeType !== holder.mimeType) out = { ...out, mimeType }
   }
   return maskOtherFields(out, BODY_FIELDS, counter)
 }

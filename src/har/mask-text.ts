@@ -29,13 +29,31 @@ export type Counter = {
    * URLs (`wss://host/path?id=…`, long polling) is the connection token.
    */
   hubs?: Set<string>
+  /**
+   * Values the recording uses as credentials (cookie values, `Authorization` and other secret
+   * headers, secret-named values of 16 characters or more): never kept as identifiers, even where
+   * a body lists one under `id` (`[{"id": <the session cookie>}]`).
+   */
+  credentials?: Set<string>
 }
 
 /** What a recording's bodies and URLs tell the masking of everything else, found before masking. */
-export type RecordingFacts = { ids: Set<string>; tokens: Set<string>; hubs: Set<string> }
+export type RecordingFacts = { ids: Set<string>; tokens: Set<string>; hubs: Set<string>; credentials: Set<string> }
 
 export function emptyFacts(): RecordingFacts {
-  return { ids: new Set(), tokens: new Set(), hubs: new Set() }
+  return { ids: new Set(), tokens: new Set(), hubs: new Set(), credentials: new Set() }
+}
+
+/** A value the recording uses as a credential elsewhere: masked wherever it stands whole, `id` or not. */
+export function isCredential(counter: Counter, value: string): boolean {
+  const credentials = counter.credentials
+  if (!credentials?.size || value.length < 16) return false
+  return credentials.has(value) || (value.includes('%') && credentials.has(safeDecode(value)))
+}
+
+/** A value a body keeps as an identifier, and the recording never uses as a credential. */
+export function isKnownId(counter: Counter, value: string): boolean {
+  return !!counter.ids?.has(value) && !counter.credentials?.has(value)
 }
 
 /** Masks without counting, for values that repeat ones counted elsewhere. */
@@ -43,7 +61,8 @@ export const QUIET: Counter = { add: () => undefined }
 
 /** Counts nothing, for values that repeat ones counted elsewhere, and knows the same facts. */
 export function quietOf(counter: Counter): Counter {
-  return counter.ids || counter.tokens || counter.hubs ? { ids: counter.ids, tokens: counter.tokens, hubs: counter.hubs, add: () => undefined } : QUIET
+  const { ids, tokens, hubs, credentials } = counter
+  return ids || tokens || hubs || credentials ? { ids, tokens, hubs, credentials, add: () => undefined } : QUIET
 }
 
 /** What the surroundings say about a value. */
@@ -102,7 +121,7 @@ const SENSITIVE_PARTS = [
 /** Whole words of a name (`otpCode`, `user_otp`), never a part of one (`rootPath`, `slotProps`). */
 const SENSITIVE_WORDS = new Set(['otp', 'totp', 'hotp'])
 const SENSITIVE_EXACT = new Set(['auth', 'pwd', 'pass', 'key', 'sig', 'sid', 'pin', 'ssn', 'cvv', 'cvc'])
-const SENSITIVE_SUFFIXES = ['key', 'auth', 'pwd', 'sid']
+const SENSITIVE_SUFFIXES = ['key', 'auth', 'pwd']
 const NOT_SENSITIVE = new Set([
   'secwebsocketkey',
   'secwebsocketaccept',
@@ -122,16 +141,22 @@ export function isSensitiveName(name: string): boolean {
   if (SENSITIVE_EXACT.has(n)) return true
   for (const part of SENSITIVE_PARTS) if (n.includes(part)) return true
   for (const suffix of SENSITIVE_SUFFIXES) if (n.length > suffix.length && n.endsWith(suffix)) return true
+  // `sid` as a word (`connect.sid`, `userSid`) or a cookie's capitals (`APISID`, `__Secure-3PSID`),
+  // never inside one (`addressId`, `processId`, `classId`).
+  if (n.endsWith('sid') && (nameWords(name).pop() === 'sid' || /SID$/.test(name.split(/[^A-Za-z0-9]/).pop() ?? ''))) return true
   if (n.includes('otp')) for (const word of nameWords(name)) if (SENSITIVE_WORDS.has(word)) return true
   return false
 }
 
-/** `isSensitiveName`, plus OAuth's `code` and CAS's `ticket` inside a sign-in flow. */
+/**
+ * `isSensitiveName`, plus, inside a sign-in flow, OAuth's `code`, CAS's `ticket` and the `hash`
+ * that signs a login (Telegram's Login Widget and Mini App data, e-mail verification links).
+ */
 export function isSecretName(name: string, options: MaskOptions = {}): boolean {
   if (isSensitiveName(name)) return true
   if (!options.oauth) return false
   const n = name.trim().toLowerCase()
-  return n === 'code' || n === 'ticket'
+  return n === 'code' || n === 'ticket' || n === 'hash'
 }
 
 /** The words of a name: `otpCode` → otp, code; `X-Request-ID` → x, request, id. */
@@ -177,17 +202,24 @@ const ID_WORDS = new Set([
  */
 const CREDENTIAL_WORDS = new Set(['auth', 'authn', 'authz', 'hmac', 'mfa', 'pwd', 'pass', 'passwd', 'pin', 'ssn', 'sig', 'otp', 'totp', 'hotp', 'cvv', 'cvc'])
 
+/** A credential word before the last word of a name: `X-Auth-Hash`, `X-Pin-Hash`, `auth_req_id`. */
+export function hasCredentialWord(name: string, words = nameWords(name)): boolean {
+  for (let i = 0; i < words.length - 1; i++) if (CREDENTIAL_WORDS.has(words[i])) return true
+  return false
+}
+
 /** `requestId`, `node_id`, `sha`, `etag`, `v`: the value identifies something and is no secret. */
 export function isIdName(name: string): boolean {
   if (!name || name.length > 64 || isSensitiveName(name)) return false
   const words = nameWords(name)
-  if (!words.length || !ID_WORDS.has(words[words.length - 1])) return false
-  for (let i = 0; i < words.length - 1; i++) if (CREDENTIAL_WORDS.has(words[i])) return false
-  return true
+  return words.length > 0 && ID_WORDS.has(words[words.length - 1]) && !hasCredentialWord(name, words)
 }
 
-/** Parameter names that only appear in OAuth and OpenID requests and responses. */
-const OAUTH_NAMES = new Set(['state', 'grant_type', 'redirect_uri', 'code_verifier', 'code_challenge', 'response_type', 'session_state', 'client_assertion'])
+/**
+ * Parameter names that only appear in sign-in flows: OAuth and OpenID requests and responses, and
+ * Telegram's login data, whose `hash` is the HMAC of the fields beside `auth_date`.
+ */
+const OAUTH_NAMES = new Set(['state', 'grant_type', 'redirect_uri', 'code_verifier', 'code_challenge', 'response_type', 'session_state', 'client_assertion', 'auth_date'])
 
 /** Whether a set of parameter or field names belongs to an OAuth flow. */
 export function hasOauthNames(names: Iterable<string>): boolean {
@@ -195,8 +227,11 @@ export function hasOauthNames(names: Iterable<string>): boolean {
   return false
 }
 
-/** OAuth's `code` (and CAS's `ticket`) count as secrets on redirect, callback and sign-in URLs. */
-export const OAUTH_PATH = /oauth|openid|callback|authori[sz]e|signin|sign-in|login|token|saml|sso\b|\bauth\b|\bcas\b/i
+/**
+ * OAuth's `code`, CAS's `ticket` and a login `hash` count as secrets on redirect, callback,
+ * sign-in, verification and confirmation URLs.
+ */
+export const OAUTH_PATH = /oauth|openid|callback|authori[sz]e|signin|sign-in|login|token|saml|sso\b|\bauth\b|\bcas\b|verif|confirm|activat|(?<!p)reset/i
 
 // ── Token shapes ─────────────────────────────────────────────────────────────────────────────
 
@@ -321,6 +356,8 @@ function maskLooseJson(text: string, counter: Counter, kind: MaskKind, options: 
 /** Masks token-shaped values, credentials in URLs and secret-named pairs in any text. */
 export function maskText(text: string, counter: Counter, kind: MaskKind = 'other', options: MaskOptions = {}): string {
   if (text.length < 6) return text
+  // Telegram's login data (`…&auth_date=…&hash=…`, in a header or a string): its hash signs it.
+  if (!options.oauth && text.includes('auth_date')) options = { ...options, oauth: true }
   let out = maskTokens(text, counter, kind)
   if (out.includes('Bearer') || out.includes('Basic') || out.includes('Digest') || out.includes('Token') || out.includes('Negotiate')) {
     out = out.replace(AUTH_SCHEME, (match, scheme: string, space: string, value: string) => {
@@ -383,6 +420,10 @@ export function maskText(text: string, counter: Counter, kind: MaskKind = 'other
  */
 export function maskValue(value: string, counter: Counter, kind: MaskKind, options: MaskOptions = {}): string {
   if (value.length < 6) return value
+  if (value !== MASK && isCredential(counter, value)) {
+    counter.add(kind)
+    return MASK
+  }
   const depth = options.depth ?? 0
   const json = maskJsonValue(value, counter, kind, options)
   if (json !== null) return json
@@ -451,14 +492,13 @@ export function maskRandom(text: string, counter: Counter, kind: MaskKind, optio
     const before = NAME_BEFORE.exec(text.slice(Math.max(0, offset - 48), offset))
     if (before && isIdName(before[1])) return run
     const body = run.replace(/=+$/, '')
-    const ids = counter.ids
-    if (ids?.has(run) || ids?.has(body)) return run
+    if (isKnownId(counter, run) || isKnownId(counter, body)) return run
     if (body.includes('/') && body.length === run.length && !body.includes('+')) {
       let changed = false
       const pieces = body.split('/')
       const last = pieces.length - 1
       pieces.forEach((piece, index) => {
-        if ((fileName && index === last) || ids?.has(piece) || !isRandom(piece, options)) return
+        if ((fileName && index === last) || isKnownId(counter, piece) || !isRandom(piece, options)) return
         changed = true
         counter.add(kind)
         pieces[index] = MASK

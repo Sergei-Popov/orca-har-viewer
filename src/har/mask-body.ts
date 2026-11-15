@@ -13,6 +13,7 @@ import {
   MAX_IDS,
   QUIET,
   hasOauthNames,
+  isCredential,
   isIdName,
   isRandom,
   isSecretName,
@@ -376,7 +377,8 @@ function maskHtmlJson(html: string, counter: Counter, kind: MaskKind, options: M
 // ── JSON, in place ───────────────────────────────────────────────────────────────────────────
 
 /** Keys that only OAuth and OpenID bodies have, so their `code` is a secret. */
-const OAUTH_JSON = /"(?:grant_type|redirect_uri|code_verifier|session_state)"/
+const OAUTH_JSON = /"(?:grant_type|redirect_uri|code_verifier|session_state|auth_date)"/
+const SIGN_IN: MaskOptions = { oauth: true }
 
 type Frame = {
   object: boolean
@@ -394,17 +396,20 @@ type Frame = {
 }
 
 /** A JSON string of the catch-all's alphabet under some name, or a connection token: worth a walk. */
-const FACT_HINT = /"[A-Za-z_$][\w$.-]{0,40}"\s*:\s*"[A-Za-z0-9+_-]{20,200}"|connectiontoken/i
+const FACT_HINT = /"[A-Za-z_$][\w$.-]{0,40}"\s*:\s*"[A-Za-z0-9+_-]{16,200}"|connectiontoken/i
 
 /**
  * What a JSON body tells the masking of the rest of the recording, read before anything is
  * masked: the values it keeps under identifier names, in the same frames `maskJsonText` masks
- * with (never inside a secret-named object: `{"session":{"id":…}}` is a secret), and SignalR
- * connection tokens. Text that is not a JSON object or array tells nothing.
+ * with (never inside a secret-named object: `{"session":{"id":…}}` is a secret), the values it
+ * masks by name (credentials, which no body can make an identifier), and SignalR connection
+ * tokens. Text that is not a JSON object or array tells nothing. `options.oauth` is the request's
+ * own sign-in flow, decided as for `maskJsonText`.
  */
-export function collectJsonFacts(text: string, facts: RecordingFacts): void {
+export function collectJsonFacts(text: string, facts: RecordingFacts, options: MaskOptions = {}): void {
   const full = () => facts.ids.size >= MAX_IDS
-  if (text.length < 30 || !FACT_HINT.test(text) || (full() && !/connectiontoken/i.test(text)) || !isJsonContainer(text)) return
+  // Walked even with the identifiers full: its credentials still veto the identifiers known.
+  if (text.length < 30 || !FACT_HINT.test(text) || !isJsonContainer(text)) return
   const tokens = new JsonTokens(text)
   type Walk = { object: boolean; expectKey: boolean; secret: boolean; valueSecret: boolean; key: string; ids: boolean }
   const stack: Walk[] = []
@@ -416,11 +421,19 @@ export function collectJsonFacts(text: string, facts: RecordingFacts): void {
     if (id === undefined) idNames.set(name, (id = isIdName(name)))
     return id
   }
-  // Conservative: `code` and `ticket` count as secret names wherever they are.
+  // As `maskJsonText` decides: `code`, `ticket` and `hash` are secret names in a sign-in flow
+  // (the body's own keys are searched only when one of those names turns up).
+  let oauth = options.oauth ? true : undefined
   const isSecret = (name: string) => {
     let secret = secretNames.get(name)
-    if (secret === undefined) secretNames.set(name, (secret = isSecretName(name, { oauth: true })))
+    if (secret === undefined) {
+      secret = isSecretName(name) || (isSecretName(name, SIGN_IN) && (oauth ??= OAUTH_JSON.test(text)))
+      secretNames.set(name, secret)
+    }
     return secret
+  }
+  const credential = (value: string) => {
+    if (value.length >= 16 && value.length <= 4096 && facts.credentials.size < MAX_IDS) facts.credentials.add(value)
   }
   while (tokens.next()) {
     const top = stack[stack.length - 1] as Walk | undefined
@@ -440,9 +453,16 @@ export function collectJsonFacts(text: string, facts: RecordingFacts): void {
         top.expectKey = false
         top.key = value
         top.valueSecret = top.secret || isSecret(value)
+        // A key that is a value: the session IDs of `{"sessions": {"<id>": …}}`.
+        if (top.secret && isRandom(value)) credential(value)
       } else if (top.object && top.key.length === 15 && top.key.toLowerCase() === 'connectiontoken') {
         if (value.length >= 8) facts.tokens.add(value)
-      } else if (value.length >= 20 && value.length <= 200 && !full() && !(top.object ? top.valueSecret : top.secret) && (top.object ? isId(top.key) : top.ids)) {
+        credential(value)
+      } else if (top.object ? top.valueSecret : top.secret) {
+        // Any value right under a secret name; deeper inside a secret object only random-looking
+        // ones (a token, not the e-mail of `{"session": {"user": …}}`).
+        if ((top.object && !top.secret) || isRandom(value)) credential(value)
+      } else if (value.length >= 20 && value.length <= 200 && !full() && (top.object ? isId(top.key) : top.ids)) {
         // As `maskJsonText` keeps it: random-looking, and no token shape in it is masked.
         if (!facts.ids.has(value) && isRandom(value) && maskTokens(value, QUIET, 'bodies') === value) facts.ids.add(value)
       }
@@ -524,6 +544,10 @@ export function maskJsonText(
           counter.add(kind)
           replace(start, end, `"${MASK}"`)
         }
+      } else if (isCredential(counter, value)) {
+        // A credential the recording sends elsewhere, here under an ordinary name or `id`.
+        counter.add(kind)
+        replace(start, end, `"${MASK}"`)
       } else {
         const ids = plainIds(top)
         const masked = maskJsonString(value, counter, kind, ids ? { ...inner, noEntropy: true } : inner, encodable)
