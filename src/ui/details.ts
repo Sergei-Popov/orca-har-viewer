@@ -5,7 +5,7 @@ import { append, h, maskedText, svg } from '../dom'
 import { clockTime } from '../format'
 import { parseJson, requestBody, responseBody } from '../har/body'
 import { frameText, type FrameText } from '../har/frames'
-import { formFields, queryFields } from '../har/payload'
+import { formFields, queryFields } from '../har/fields'
 import { toCurl, toFetch } from '../har/copy'
 import { parseServerTiming, requestCookies, responseCookies } from '../har/headers'
 import type { Entry } from '../har/model'
@@ -253,7 +253,7 @@ export class DetailsPane {
     const s = this.ctx.strings
     const raw = entry.raw
     const root = h('div')
-    // Each value decoded exactly once, from the URL and the body text (see har/payload.ts).
+    // Each value decoded exactly once, from the URL and the body text (see har/fields.ts).
     const query = queryFields(raw, entry.url)
     if (query.length) root.append(section('payload-query', s.queryParams, kvList(query, 'hv-headers'), { count: query.length }))
     const post = raw.request?.postData
