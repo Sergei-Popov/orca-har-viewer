@@ -291,6 +291,8 @@ export function bodyView(body: Body, ctx: Ctx, prefs: ViewPrefs, track: Track): 
     if (body.reason === 'external-file') return note(fill(s.externalFile, { file: body.file ?? '' }))
     if (body.reason === 'missing-file') return note(fill(s.missingFile, { file: body.file ?? '' }))
     if (body.reason === 'over-budget') return note(fill(s.overBudgetFile, { file: body.file ?? '' }))
+    if (body.reason === 'too-large') return note(fill(s.tooLargeFile, { file: body.file ?? '' }))
+    if (body.reason === 'unreadable') return note(fill(s.unreadableFile, { file: body.file ?? '' }))
     return note(body.reason === 'empty' ? s.emptyBody : s.notRecorded)
   }
   let kind: ViewKind

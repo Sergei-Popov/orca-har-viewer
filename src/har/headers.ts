@@ -59,6 +59,24 @@ export function parseCookieHeader(value: string): HarCookie[] {
     })
 }
 
+/**
+ * Cookies folded into one Set-Cookie value with `, ` (as `Headers.get` and some recorders join
+ * them): split before each `, name=`, not inside `Expires=Wed, 21 Oct 2026 …`. The comma stays
+ * at the end of each piece, so joining them gives the value back.
+ */
+export function splitSetCookie(line: string): string[] {
+  const out: string[] = []
+  let start = 0
+  for (let comma = line.indexOf(','); comma >= 0; comma = line.indexOf(',', comma + 1)) {
+    if (/^,[ \t]*[^;,=\s]{1,256}=/.test(line.slice(comma, comma + 260))) {
+      out.push(line.slice(start, comma + 1))
+      start = comma + 1
+    }
+  }
+  out.push(line.slice(start))
+  return out
+}
+
 /** One Set-Cookie line → a cookie with its attributes. */
 export function parseSetCookie(line: string): HarCookie {
   const [pair, ...attributes] = line.split(';')
@@ -83,8 +101,9 @@ export function parseSetCookie(line: string): HarCookie {
 export function requestCookies(cookies: HarCookie[] | undefined, headers: HarNameValue[] | undefined): HarCookie[] {
   if (Array.isArray(cookies) && cookies.length) return cookies
   const out: HarCookie[] = []
-  for (const header of headers ?? []) {
-    if (header?.name?.toLowerCase() === 'cookie' && typeof header.value === 'string') out.push(...parseCookieHeader(header.value))
+  if (!Array.isArray(headers)) return out
+  for (const header of headers) {
+    if (typeof header?.name === 'string' && header.name.toLowerCase() === 'cookie' && typeof header.value === 'string') out.push(...parseCookieHeader(header.value))
   }
   return out
 }
@@ -92,10 +111,16 @@ export function requestCookies(cookies: HarCookie[] | undefined, headers: HarNam
 export function responseCookies(cookies: HarCookie[] | undefined, headers: HarNameValue[] | undefined): HarCookie[] {
   if (Array.isArray(cookies) && cookies.length) return cookies
   const out: HarCookie[] = []
-  for (const header of headers ?? []) {
-    if (header?.name?.toLowerCase() !== 'set-cookie' || typeof header.value !== 'string') continue
-    // Some recorders join several Set-Cookie headers with line breaks.
-    for (const line of header.value.split('\n')) if (line.trim()) out.push(parseSetCookie(line))
+  if (!Array.isArray(headers)) return out
+  for (const header of headers) {
+    if (typeof header?.name !== 'string' || header.name.toLowerCase() !== 'set-cookie' || typeof header.value !== 'string') continue
+    // Some recorders join several Set-Cookie headers with line breaks, others with `, `.
+    for (const line of header.value.split('\n')) {
+      for (const one of splitSetCookie(line)) {
+        const cookie = one.trim().replace(/,$/, '')
+        if (cookie) out.push(parseSetCookie(cookie))
+      }
+    }
   }
   return out
 }

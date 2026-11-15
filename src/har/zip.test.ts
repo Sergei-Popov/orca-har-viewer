@@ -173,7 +173,7 @@ test('review 16, 20: a total unpack budget for an archive, and a cache that lets
   assert.equal(files.get('b.txt')?.length, MB)
   // Past the budget: not unpacked, and the body says why.
   assert.equal(files.get('c.txt'), null)
-  assert.ok(files.overBudget?.('c.txt') && !files.overBudget?.('a.txt'))
+  assert.ok(files.problem?.('c.txt') === 'over-budget' && files.problem?.('a.txt') === null)
   const body = responseBody(har.log.entries![2], files)
   assert.ok(body.kind === 'none' && body.reason === 'over-budget')
   // a.txt left the cache for b.txt, and unpacks again within the budget it already counted.

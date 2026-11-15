@@ -3,16 +3,24 @@
 
 import type { HarContent, HarEntry, HarPostData } from './types'
 
+/**
+ * Why a body file in the archive gave no bytes: the archive's bodies together unpack to too much,
+ * the file alone does, or it is damaged or packed in a way that cannot be unpacked.
+ */
+export type FileProblem = 'over-budget' | 'too-large' | 'unreadable'
+
 /** Body files of a .har.zip, by name. */
 export type SideFiles = {
   has(name: string): boolean
   get(name: string): Uint8Array | null
-  /** Whether `get` gave null because the archive's bodies together unpack to too much. */
-  overBudget?(name: string): boolean
+  /** Why `get` gave null for a file the archive has; null when it did not. */
+  problem?(name: string): FileProblem | null
+  /** What the file unpacks to, as the archive declares it. */
+  size?(name: string): number
 }
 
 export type Body =
-  | { kind: 'none'; reason: 'empty' | 'not-recorded' | 'missing-file' | 'external-file' | 'over-budget'; file?: string }
+  | { kind: 'none'; reason: 'empty' | 'not-recorded' | 'missing-file' | 'external-file' | FileProblem; file?: string }
   | { kind: 'text'; text: string; mimeType: string; size: number; base64: boolean; file?: string }
   | { kind: 'bytes'; bytes: Uint8Array; mimeType: string; size: number; file?: string }
 
@@ -50,7 +58,7 @@ function readBody(
   if (typeof file === 'string' && file) {
     if (!files) return { kind: 'none', reason: 'external-file', file }
     const bytes = files.get(file)
-    if (!bytes) return { kind: 'none', reason: files.overBudget?.(file) ? 'over-budget' : 'missing-file', file }
+    if (!bytes) return { kind: 'none', reason: (files.has(file) && files.problem?.(file)) || 'missing-file', file }
     return fromBytes(bytes, mimeType, false, file)
   }
   if (typeof text !== 'string') return { kind: 'none', reason: declared === 0 ? 'empty' : 'not-recorded' }
@@ -122,10 +130,18 @@ export function charsetOf(mimeType: string): string {
   return match ? match[1].toLowerCase() : 'utf-8'
 }
 
+/** A byte order mark's encoding: it beats a declared charset, as in browsers. */
+export function sniffBom(bytes: Uint8Array): 'utf-8' | 'utf-16le' | 'utf-16be' | null {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'utf-8'
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le'
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be'
+  return null
+}
+
 export function decodeText(bytes: Uint8Array, charset = 'utf-8'): string {
   let decoder: TextDecoder
   try {
-    decoder = new TextDecoder(charset)
+    decoder = new TextDecoder(sniffBom(bytes) ?? charset)
   } catch {
     decoder = new TextDecoder('utf-8')
   }

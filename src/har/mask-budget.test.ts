@@ -4,7 +4,7 @@
 import { assert, test } from 'orca/testing'
 import { encodeBase64 } from './body'
 import { reindentJson } from './json-text'
-import { maskBodyBytes, maskBodyText, maskFreeText, maskText, maskUrl, sanitizeHar, type Counter } from './sanitize'
+import { maskBodyBytes, maskBodyText, maskFreeText, maskHeaderValue, maskText, maskUrl, sanitizeHar, type Counter } from './sanitize'
 import type { Har } from './types'
 
 const BUDGET_MS = 200
@@ -44,7 +44,25 @@ const INPUTS: Record<string, string> = {
   'Socket.IO prefix and brackets': `42${fill('[')}`,
   'unclosed JSON': `{"a":${fill('[')}`,
   'JSON with many strings': `[${fill('"https://x.example.com/?token=abc&next=%2Fa%3Fb%3Dc",').slice(0, -1)}]`,
-  'deep JSON': `${fill('[', SIZE / 2)}${fill(']', SIZE / 2)}`
+  'deep JSON': `${fill('[', SIZE / 2)}${fill(']', SIZE / 2)}`,
+  // Round 2: the catch-all, JSON islands, line pairs, unquoted HTML and the new wire formats.
+  'random-looking run': fill('aZ3kQ9x-'),
+  'runs split by slashes': fill('aZ3kQ9xT7mW2pL5vB8nR/'),
+  'runs before dots': fill('aZ3kQ9xT7mW2pL5vB8nR.'),
+  'brackets without an end': fill('{['),
+  'islands in islands': `${fill('{"a":[', SIZE / 2)}${fill(']}', SIZE / 2)}`,
+  'unclosed islands': fill('{"a":1 x'),
+  'quote that never closes in brackets': `["${fill('\\"')}`,
+  'line pairs': fill('password: x\n'),
+  'line pairs without values': fill('a=\n'),
+  'unquoted attributes': fill('<input name=token value='),
+  'server-sent events': `data: ${fill('{\ndata: ')}`,
+  'STOMP headers': `SEND\n${fill('passcode:a\n')}`,
+  'Engine.IO 3 lengths': fill('1:1'),
+  'JSONP with long spaces': `cb(${fill(' ')}`,
+  'folded cookies': fill('a=1, '),
+  'nested multipart': fill('--b\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n'),
+  'deeply encoded value': `next=${fill('%25')}3D`
 }
 
 function timed(run: () => unknown): number {
@@ -97,4 +115,19 @@ test('review 15: byte bodies and the lossless indenter stay linear', () => {
   assert.ok(timed(() => maskBodyBytes(latin, 'text/plain', quiet)) < BUDGET_MS)
   assert.ok(timed(() => encodeBase64(bytes)) < BUDGET_MS)
   assert.ok(timed(() => reindentJson(INPUTS['JSON with many strings'])) < BUDGET_MS)
+  // UTF-16 read code unit by code unit, and multipart bytes nested past the limit.
+  assert.ok(timed(() => maskBodyBytes(latin, 'text/plain; charset=utf-16le', quiet)) < BUDGET_MS)
+  const nested = new TextEncoder().encode(INPUTS['nested multipart'])
+  assert.ok(timed(() => maskBodyBytes(nested, 'multipart/mixed; boundary=b', quiet)) < BUDGET_MS)
+})
+
+test('round 2: headers with folded cookies, links and random values stay linear', () => {
+  const slow: string[] = []
+  for (const name of ['Set-Cookie', 'Cookie', 'Link', 'ETag', 'X-Custom']) {
+    for (const [input, text] of Object.entries(INPUTS)) {
+      const ms = timed(() => maskHeaderValue(name, text, quiet))
+      if (ms > BUDGET_MS) slow.push(`${input} as ${name}: ${Math.round(ms)} ms`)
+    }
+  }
+  assert.deepEqual(slow, [])
 })

@@ -5,6 +5,7 @@ import { append, h, maskedText, svg } from '../dom'
 import { clockTime } from '../format'
 import { parseJson, requestBody, responseBody } from '../har/body'
 import { frameText, type FrameText } from '../har/frames'
+import { formFields, queryFields } from '../har/fields'
 import { toCurl, toFetch } from '../har/copy'
 import { parseServerTiming, requestCookies, responseCookies } from '../har/headers'
 import type { Entry } from '../har/model'
@@ -68,7 +69,14 @@ export class DetailsPane {
     this.entry = entry
     this.data = data
     const s = this.ctx.strings
-    const tabs = this.availableTabs(entry)
+    let tabs: DetailTab[]
+    try {
+      tabs = this.availableTabs(entry)
+    } catch (error) {
+      // A field of a type no recorder writes: the headers at least, never the previous request.
+      console.warn('[har-viewer] cannot list the tabs of this request', error)
+      tabs = ['headers']
+    }
     if (!tabs.includes(this.tab)) this.tab = entry.raw._webSocketMessages?.length && tabs.includes('messages') ? 'messages' : 'headers'
 
     const status = entry.failed ? s.failed : String(entry.status)
@@ -116,7 +124,7 @@ export class DetailsPane {
   private availableTabs(entry: Entry): DetailTab[] {
     const raw = entry.raw
     const tabs: DetailTab[] = ['headers']
-    if ((raw.request?.queryString?.length ?? 0) > 0 || raw.request?.postData || entry.url.includes('?')) tabs.push('payload')
+    if ((Array.isArray(raw.request?.queryString) && raw.request.queryString.length > 0) || raw.request?.postData || entry.url.includes('?')) tabs.push('payload')
     const ws = Array.isArray(raw._webSocketMessages)
     if (!ws || responseBody(raw, this.data?.files).kind !== 'none') tabs.push('response')
     if (ws) tabs.push('messages')
@@ -127,7 +135,7 @@ export class DetailsPane {
   }
 
   private tabCount(entry: Entry, tab: DetailTab): number | null {
-    if (tab === 'messages') return entry.raw._webSocketMessages?.length ?? 0
+    if (tab === 'messages') return Array.isArray(entry.raw._webSocketMessages) ? entry.raw._webSocketMessages.length : 0
     if (tab === 'cookies') {
       const { request, response } = this.cookies(entry)
       return request.length + response.length
@@ -148,6 +156,17 @@ export class DetailsPane {
     const data = this.data
     if (!entry || !data) return
     content.scrollTop = 0
+    let node: Node
+    try {
+      node = this.tabContent(entry, data)
+    } catch (error) {
+      console.warn('[har-viewer] cannot show this tab', error)
+      node = note(fill(this.ctx.strings.tabFailed, { message: error instanceof Error ? error.message : String(error) }))
+    }
+    content.replaceChildren(node)
+  }
+
+  private tabContent(entry: Entry, data: Dataset): Node {
     let node: Node
     switch (this.tab) {
       case 'headers':
@@ -172,7 +191,7 @@ export class DetailsPane {
         node = this.initiatorTab(entry, data)
         break
     }
-    content.replaceChildren(node)
+    return node
   }
 
   // ── Headers ──
@@ -189,14 +208,14 @@ export class DetailsPane {
     if (entry.httpVersion) general.push([s.protocol, entry.httpVersion])
     if (entry.priority) general.push([s.priority, entry.priority])
     if (entry.cache) general.push([s.servedFrom, (s.caches[entry.cache] ?? entry.cache).replace(/[()]/g, '')])
-    if (raw.connection) general.push([s.connection, raw.connection])
+    if (typeof raw.connection === 'string' && raw.connection) general.push([s.connection, raw.connection])
     if (Number.isFinite(entry.start)) general.push([s.startedAt, clockTime(entry.start)])
     if (entry.mimeType) general.push([s.type, `${entry.mimeType} · ${s.types[entry.type]}`])
-    if (raw.response?.redirectURL) general.push([s.redirectTo, raw.response.redirectURL])
+    if (typeof raw.response?.redirectURL === 'string' && raw.response.redirectURL) general.push([s.redirectTo, raw.response.redirectURL])
     if (entry.error && !entry.failed) general.push([s.error, entry.error])
 
-    const response = raw.response?.headers ?? []
-    const request = raw.request?.headers ?? []
+    const response = Array.isArray(raw.response?.headers) ? raw.response.headers : []
+    const request = Array.isArray(raw.request?.headers) ? raw.request.headers : []
     const statusLine = `${entry.httpVersion || 'HTTP/1.1'} ${entry.status} ${entry.statusText}`
     let requestLine = `${entry.method} ${entry.path || '/'} ${raw.request?.httpVersion || entry.httpVersion || 'HTTP/1.1'}`
     if (!entry.path) requestLine = `${entry.method} ${entry.url}`
@@ -234,23 +253,11 @@ export class DetailsPane {
     const s = this.ctx.strings
     const raw = entry.raw
     const root = h('div')
-    let query: [string, string][] = (raw.request?.queryString ?? []).map((q) => [q.name ?? '', q.value ?? ''])
-    if (!query.length && entry.url.includes('?')) {
-      try {
-        new URL(entry.url).searchParams.forEach((value, name) => query.push([name, value]))
-      } catch {
-        query = []
-      }
-    }
-    if (query.length) root.append(section('payload-query', s.queryParams, kvList(query.map(([n, v]) => [n, safeDecode(v)]), 'hv-headers'), { count: query.length }))
+    // Each value decoded exactly once, from the URL and the body text (see har/fields.ts).
+    const query = queryFields(raw, entry.url)
+    if (query.length) root.append(section('payload-query', s.queryParams, kvList(query, 'hv-headers'), { count: query.length }))
     const post = raw.request?.postData
-    const params = (post?.params ?? []).map((p): [string, string] => [p.name ?? '', p.fileName ? `${p.fileName}${p.contentType ? ` (${p.contentType})` : ''}` : (p.value ?? '')])
-    let form = params
-    const mime = (post?.mimeType ?? '').toLowerCase()
-    if (!form.length && mime.includes('application/x-www-form-urlencoded') && typeof post?.text === 'string') {
-      form = []
-      new URLSearchParams(post.text).forEach((value, name) => form.push([name, value]))
-    }
+    const form = formFields(raw) ?? []
     if (form.length) root.append(section('payload-form', s.formData, kvList(form, 'hv-headers'), { count: form.length }))
     else if (post) root.append(section('payload-body', s.requestPayload, bodyView(requestBody(raw, data.files), this.ctx, this.prefs, this.track)))
     if (!root.childNodes.length) root.append(note(s.noPayload))
@@ -343,8 +350,8 @@ export class DetailsPane {
       root.append(h('div', { className: 'hv-muted', style: 'margin-bottom:4px' }, fill(s.startedAfter, { clock: clockTime(entry.start), offset: this.ctx.ms(entry.start - data.model.start) })))
     }
     root.append(grid)
-    const serverTiming = (entry.raw.response?.headers ?? [])
-      .filter((header) => header?.name?.toLowerCase() === 'server-timing')
+    const serverTiming = (Array.isArray(entry.raw.response?.headers) ? entry.raw.response.headers : [])
+      .filter((header) => typeof header?.name === 'string' && header.name.toLowerCase() === 'server-timing')
       .flatMap((header) => parseServerTiming(String(header.value ?? '')))
     if (serverTiming.length) {
       const longest = Math.max(1, ...serverTiming.map((m) => m.duration))
@@ -369,7 +376,7 @@ export class DetailsPane {
 
   private messagesTab(entry: Entry): Node {
     const s = this.ctx.strings
-    const messages = (entry.raw._webSocketMessages ?? []).filter((m): m is HarWebSocketMessage => !!m && typeof m === 'object')
+    const messages = (Array.isArray(entry.raw._webSocketMessages) ? entry.raw._webSocketMessages : []).filter((m): m is HarWebSocketMessage => !!m && typeof m === 'object')
     if (!messages.length) return note(s.noMessages)
     const root = h('div', { className: 'hv-msgs' })
     const input = h('input', { type: 'search', placeholder: s.filterMessages, value: this.messageFilter, style: 'height:24px;padding:0 6px' })
@@ -388,7 +395,7 @@ export class DetailsPane {
     }
     const row = (i: number) => {
       const message = messages[i]
-      const data = message.data ?? ''
+      const data = typeof message.data === 'string' ? message.data : message.data == null ? '' : JSON.stringify(message.data)
       const text = textOf(i)
       const send = message.type === 'send'
       const binary = message.opcode !== undefined && message.opcode !== 1
@@ -470,14 +477,17 @@ export class DetailsPane {
     const table = h('table', { className: 'hv-table' })
     for (let level: HarStack | undefined = stack, depth = 0; level && depth < 64; level = level.parent, depth++) {
       if (depth > 0 || level.description) table.append(h('tr', {}, h('td', { colspan: 2, className: 'hv-muted' }, level.description ?? '')))
-      for (const frame of level.callFrames ?? []) {
-        const where = frame.url ? `${frame.url.split('/').pop() || frame.url}:${(frame.lineNumber ?? 0) + 1}${frame.columnNumber !== undefined ? `:${frame.columnNumber + 1}` : ''}` : ''
+      for (const frame of Array.isArray(level.callFrames) ? level.callFrames : []) {
+        if (!frame || typeof frame !== 'object') continue
+        const url = typeof frame.url === 'string' ? frame.url : ''
+        const line = typeof frame.lineNumber === 'number' ? frame.lineNumber : 0
+        const where = url ? `${url.split('/').pop() || url}:${line + 1}${typeof frame.columnNumber === 'number' ? `:${frame.columnNumber + 1}` : ''}` : ''
         table.append(
           h(
             'tr',
             {},
-            h('td', { className: 'hv-wrapcell' }, frame.functionName || s.anonymous),
-            h('td', { className: 'hv-wrapcell' }, frame.url ? this.urlLink(frame.url, where, data, entry) : '')
+            h('td', { className: 'hv-wrapcell' }, (typeof frame.functionName === 'string' && frame.functionName) || s.anonymous),
+            h('td', { className: 'hv-wrapcell' }, url ? this.urlLink(url, where, data, entry) : '')
           )
         )
       }
@@ -513,14 +523,6 @@ function findRequest(data: Dataset, url: string, entry: Entry): Entry | null {
     if (Number.isFinite(other.start) && other.start <= entry.start && (!Number.isFinite(best.start) || best.start > entry.start || other.start > best.start)) best = other
   }
   return best
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value.replace(/\+/g, ' '))
-  } catch {
-    return value
-  }
 }
 
 /** Frames built per page of the Messages tab. */

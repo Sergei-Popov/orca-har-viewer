@@ -29,13 +29,21 @@ All notable changes to this plugin are documented here. The format follows
 - Copy as cURL and as fetch; "Export for agent", a Markdown digest of selected, failed or
   listed requests with bodies cut and known secret patterns masked, to copy or save.
 - "Mask secrets" with a banner counting what was masked, and "Save sanitized…" for a masked
-  `.har` or `.har.zip`. Masking knows credential headers and cookies, secret-named parameters,
-  form fields (urlencoded, multipart, plain text) and JSON keys, OAuth codes in OAuth flows,
-  SAML messages, URLs nested in values and token shapes anywhere; it masks JSON in place
-  (64-bit integers and spacing stay), every body the viewer shows as text whatever its type
-  (written back in its encoding), SignalR and Socket.IO frames, page titles, comments and
-  vendor fields.
-- A `.har.zip` unpacks its body files on demand, within 512 MB together.
+  `.har` or `.har.zip`. Masking knows credential headers and cookies (folded and nameless
+  ones too), secret-named parameters in URLs, fragments and hash routes, form fields
+  (urlencoded, multipart, plain text), JSON keys and whole secret-named objects, `name: value`
+  lines, quoted and unquoted HTML fields, OAuth codes and CAS tickets in sign-in flows, SAML and
+  WS-Federation messages, URLs nested in values (encoded once or more), token shapes anywhere,
+  and values that look random (with an allowlist for hashes, IDs and asset names). It masks
+  JSON in place (64-bit integers and spacing stay), every body the viewer shows as text
+  whatever its type (written back in its encoding, UTF-16 byte for byte), JSON wrapped in
+  SignalR, Socket.IO (long-polling too), SockJS, STOMP, server-sent events, JSONP, XSSI guards,
+  HTML and other text, page titles, comments, the tool's own fields and fields of unexpected
+  types. A request that cannot be masked is masked whole and counted, never skipped.
+- Large files are masked, and their sanitized `.har.zip` packed, in slices with progress; when
+  that takes longer than Orca's save gesture allows, a notice offers the ready copy.
+- A `.har.zip` unpacks its body files on demand, within 256 MB each and 512 MB together; files
+  over a limit or damaged say which.
 - Messages for empty, non-JSON and non-HAR files; cut-off and damaged files open with what
   could be read and say where they break.
 - English and Russian, following Orca's language; light and dark themes; the tab icon.

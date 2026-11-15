@@ -5,9 +5,10 @@
 
 import { decodeText, type SideFiles } from './har/body'
 import { readHar, type ReadResult } from './har/read'
-import { isZip, openHarZip, ZipError } from './har/zip'
+import { isZip, openHarZip } from './har/zip'
 import { helloArrived } from './hello'
-import { fill, stringsFor, type Strings } from './i18n'
+import { stringsFor, type Strings } from './i18n'
+import { openError, readError } from './open-errors'
 import { installStyles } from './styles'
 import { HarApp, type Recording } from './ui/app'
 
@@ -53,27 +54,6 @@ function openBytes(bytes: Uint8Array): Opened {
   return { result: readHar(decodeText(bytes)), zip: false }
 }
 
-function readError(result: Extract<ReadResult, { ok: false }>, s: Strings): [string, string | undefined] {
-  const at = result.line !== undefined ? fill(s.errorAt, { line: result.line, column: result.column ?? 1, message: result.message }) : undefined
-  if (result.reason === 'empty') return [s.errorEmpty, undefined]
-  return [result.reason === 'not-har' ? s.errorNotHar : s.errorNotJson, at]
-}
-
-function zipError(error: ZipError, s: Strings): string {
-  switch (error.code) {
-    case 'not-zip':
-      return s.errorNotZip
-    case 'no-har':
-      return s.errorNoHar
-    case 'too-large':
-      return s.errorZipLarge
-    case 'method':
-      return s.errorZipMethod
-    default:
-      return s.errorZipDamaged
-  }
-}
-
 const api = globalThis.orca?.document
 if (!api) {
   app.showError(strings.errorTitle, strings.noHost)
@@ -93,11 +73,8 @@ if (!api) {
     } catch (error) {
       if (current !== generation) return
       shown = false
-      if (error instanceof ZipError) app.showError(strings.errorTitle, zipError(error, strings), error.message)
-      else {
-        console.warn('[har-viewer] cannot open the file', error)
-        app.showError(strings.errorTitle, strings.errorZipDamaged, error instanceof Error ? error.message : String(error))
-      }
+      console.warn('[har-viewer] cannot open the file', error)
+      app.showError(strings.errorTitle, ...openError(error, strings))
       return
     }
     if (current !== generation) return
