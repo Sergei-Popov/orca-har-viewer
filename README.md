@@ -242,8 +242,10 @@ orca plugin shot local.har-viewer --editor .samples/demo.har   # PNG of the edit
   multipart, frames, byte bodies), `mask-url.ts` (URLs, parameters, free-text fields),
   `mask-text.ts` (names, token shapes, free text) and `masked.ts` (with `.har.zip` files).
 - `src/fixtures/demo.ts` — the synthetic demo recording the tests, samples and screenshots use.
-- `tools/` — `make-samples.ts` and `rasterize-icons.sh` (icons from `icons/har.svg` and
-  `images/icon.svg`).
+- `tools/` — `make-samples.ts`, `rasterize-icons.sh` (icons from `icons/har.svg` and
+  `images/icon.svg`), and the listing images: `make-listing-samples.ts` writes the demo recording
+  to `.orca/listing/samples/` and `listing.json` is the spec for the hub's
+  `scripts/listing-image.sh har-viewer`.
 - `vendor/` — [fflate](https://github.com/101arrowz/fflate) 0.8.3 (MIT) for `.har.zip`; see
   `vendor/README.md`.
 

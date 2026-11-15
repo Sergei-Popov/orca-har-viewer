@@ -1,0 +1,120 @@
+{
+  "accent": "#22C55E",
+  "title": ["HAR", "Viewer"],
+  "icon": "images/icon.png",
+  "cover": {
+    "out": "images/cover.png",
+    "alt": "Known secrets masked, 28 values in 15 requests: the request list and waterfall, a failed POST /v1/reports/export selected.",
+    "tagline": "Read network recordings, mask secrets, brief your agent.",
+    "chips": [".har", ".har.zip", "Waterfall", "Masked secrets", "Agent digest"],
+    "chipMain": 0,
+    "stage": {
+      "file": ".orca/listing/samples/dashboard.har",
+      "theme": "dark",
+      "scale": 2,
+      "width": 480,
+      "height": 816,
+      "waitFor": { "text": "29 requests" },
+      "act": [
+        { "clickLabel": "Mask secrets" },
+        { "clickText": "/v1/reports/export" },
+        { "wheel": [200, 400, -1000] },
+        { "wheel": [200, 400, 220] }
+      ],
+      "origin": { "x": 0, "y": 153 }
+    }
+  },
+  "screenshots": [
+    {
+      "out": "images/shot-1-agent-export.png",
+      "headline": "Hand failed requests to your agent",
+      "alt": "A Markdown digest of the 4 failed requests, bodies cut to 2,000 characters and known secrets masked, to copy or save as .md.",
+      "stage": {
+        "file": ".orca/listing/samples/dashboard.har",
+        "theme": "dark",
+        "waitFor": { "text": "29 requests" },
+        "act": [
+          { "clickLabel": "Mask secrets" },
+          { "clickText": "/v1/reports/export" },
+          { "wheel": [200, 350, -1000] },
+          { "wheel": [200, 350, 198] },
+          { "clickLabel": "Export for agent" },
+          { "clickText": "Failed (4)" }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-2-errors.png",
+      "headline": "Find the failures in seconds",
+      "alt": "The Errors filter keeps 4 of 29 requests, beside an overview of their types, status codes and the 2 domains they came from.",
+      "stage": {
+        "file": ".orca/listing/samples/dashboard.har",
+        "theme": "dark",
+        "waitFor": { "text": "29 requests" },
+        "act": [
+          { "clickLabel": "Mask secrets" },
+          { "clickText": "Errors" },
+          { "drag": [[616, 400], [515, 400]] },
+          { "wheel": [850, 420, 313] }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-3-timing.png",
+      "headline": "See where the time went",
+      "alt": "A slow request by phase: DNS 18 ms, connection 42 ms, SSL/TLS 31 ms, waiting 1.20 s, and Server-Timing's report query 1.10 s.",
+      "stage": {
+        "file": ".orca/listing/samples/dashboard.har",
+        "theme": "dark",
+        "waitFor": { "text": "29 requests" },
+        "act": [
+          { "clickLabel": "Mask secrets" },
+          { "clickText": "/v1/reports/export" },
+          { "drag": [[616, 300], [500, 300]] },
+          { "wheel": [200, 350, -1000] },
+          { "wheel": [200, 350, 198] },
+          { "clickText": "Timing" },
+          { "wheel": [850, 420, 98] }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-4-json-tree.png",
+      "headline": "JSON responses as a tree",
+      "alt": "A 2.4 kB JSON response in Tree view, Source a click away: 20 orders, the first opened to its id, customer, total and status.",
+      "stage": {
+        "file": ".orca/listing/samples/dashboard.har",
+        "theme": "dark",
+        "waitFor": { "text": "29 requests" },
+        "act": [
+          { "clickLabel": "Mask secrets" },
+          { "clickText": "/v1/orders?limit=20", "exact": false },
+          { "clickText": "Response" },
+          { "clickText": "0:", "exact": false },
+          { "drag": [[616, 300], [500, 300]] }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-5-websocket.png",
+      "headline": "WebSocket frames, sent and received",
+      "alt": "Follow one order: 4 of 19 socket messages match 48207, sent and received, one opened as JSON. Shown in Orca's light theme.",
+      "stage": {
+        "file": ".orca/listing/samples/dashboard.har",
+        "theme": "light",
+        "waitFor": { "text": "29 requests" },
+        "act": [
+          { "clickLabel": "Mask secrets" },
+          { "clickText": "/socket?v=3" },
+          { "clickText": "Messages", "exact": false },
+          { "drag": [[616, 300], [500, 300]] },
+          { "fill": "Filter messages", "value": "48207" },
+          { "wait": 400 },
+          { "clickText": "\"id\":48207,\"status\":\"packed\"", "exact": false },
+          { "wheel": [200, 350, -1000] },
+          { "wheel": [200, 350, 198] }
+        ]
+      }
+    }
+  ]
+}

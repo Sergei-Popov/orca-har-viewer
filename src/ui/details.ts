@@ -2,7 +2,7 @@
 // WebSocket messages and Initiator. The tab and view choices carry over between requests.
 
 import { append, h, maskedText, svg } from '../dom'
-import { clockTime } from '../format'
+import { clockTime, shownOf } from '../format'
 import { parseJson, requestBody, responseBody } from '../har/body'
 import { frameText, type FrameText } from '../har/frames'
 import { formFields, queryFields } from '../har/fields'
@@ -383,6 +383,9 @@ export class DetailsPane {
     const root = h('div', { className: 'hv-msgs' })
     const input = h('input', { type: 'search', placeholder: s.filterMessages, value: this.messageFilter, style: 'height:24px;padding:0 6px' })
     input.className = 'hv-select'
+    input.setAttribute('aria-label', s.filterMessages)
+    // How many the filter keeps, of all: `4 / 19 messages`.
+    const kept = h('span', { 'aria-live': 'polite' })
     const list = h('div', { className: 'hv-msg-list' })
     const detail = h('div', { className: 'hv-msg-detail' }, note(s.selectMessage))
     let chosen: HTMLElement | null = null
@@ -442,6 +445,7 @@ export class DetailsPane {
       more.addEventListener('click', page)
       page()
       list.replaceChildren(table)
+      kept.textContent = shownOf(matches.length, messages.length, s.messages, this.ctx.count)
     }
     let timer = 0
     input.addEventListener('input', () => {
@@ -450,7 +454,7 @@ export class DetailsPane {
       timer = window.setTimeout(render, FILTER_DELAY)
     })
     render()
-    root.append(h('div', { className: 'hv-subbar' }, input, h('span', {}, s.messages(messages.length))), list, detail)
+    root.append(h('div', { className: 'hv-subbar' }, input, kept), list, detail)
     return root
   }
 

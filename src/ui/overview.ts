@@ -1,7 +1,7 @@
 // The right pane when no request is selected: what was recorded, the totals, requests by type and
 // status, a per-domain breakdown that filters the list, and the slowest, largest and failed requests.
 
-import { append, h } from '../dom'
+import { append, h, wrappable } from '../dom'
 import { dateTime } from '../format'
 import { RESOURCE_TYPES } from '../har/classify'
 import type { Entry, Model } from '../har/model'
@@ -81,7 +81,7 @@ export function overview(ctx: Ctx, input: OverviewInput, events: OverviewEvents)
       const tr = h(
         'tr',
         { className: `hv-clickable${active ? ' hv-active' : ''}`, title: s.domainFilterHint, tabindex: 0 },
-        h('td', { className: 'hv-wrapcell' }, domain.host || '—'),
+        h('td', { className: 'hv-namecell' }, domain.host ? wrappable(domain.host) : '—'),
         h('td', { className: 'hv-num' }, ctx.count(domain.count)),
         h('td', { className: 'hv-num' }, ctx.bytes(domain.transferred)),
         h('td', { className: 'hv-num' }, ctx.ms(domain.time)),
@@ -118,7 +118,7 @@ export function overview(ctx: Ctx, input: OverviewInput, events: OverviewEvents)
         h(
           'tr',
           {},
-          h('td', { className: 'hv-wrapcell' }, page.title),
+          h('td', { className: 'hv-namecell' }, wrappable(page.title)),
           h('td', { className: 'hv-num' }, ctx.count(counts.get(page.id) ?? 0)),
           h('td', { className: 'hv-num' }, page.onContentLoad >= 0 ? ctx.ms(page.onContentLoad) : '—'),
           h('td', { className: 'hv-num' }, page.onLoad >= 0 ? ctx.ms(page.onLoad) : '—')

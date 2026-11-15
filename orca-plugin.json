@@ -15,24 +15,28 @@
   "icon": "images/icon.png",
   "cover": {
     "path": "images/cover.png",
-    "alt": "Spot failures fast: 29 requests with a waterfall, and the 500 Internal Server Error of POST export with its headers on the right."
+    "alt": "Known secrets masked, 28 values in 15 requests: the request list and waterfall, a failed POST /v1/reports/export selected."
   },
   "screenshots": [
     {
-      "path": "images/filters-light.png",
-      "alt": "Narrow to what broke: Errors and Fetch/XHR show 4 of 29 requests, and the overview counts 4xx 2, 5xx 1 and (failed) 1."
+      "path": "images/shot-1-agent-export.png",
+      "alt": "A Markdown digest of the 4 failed requests, bodies cut to 2,000 characters and known secrets masked, to copy or save as .md."
     },
     {
-      "path": "images/response-dark.png",
-      "alt": "Read JSON as a tree: the response of GET orders?limit=20&status=open with items Array(20) and the next-page link."
+      "path": "images/shot-2-errors.png",
+      "alt": "The Errors filter keeps 4 of 29 requests, beside an overview of their types, status codes and the 2 domains they came from."
     },
     {
-      "path": "images/timing-light.png",
-      "alt": "See where time went: POST export waited 1.20 s for the server, and Server-Timing shows Postgres 1.10 s and app 96 ms."
+      "path": "images/shot-3-timing.png",
+      "alt": "A slow request by phase: DNS 18 ms, connection 42 ms, SSL/TLS 31 ms, waiting 1.20 s, and Server-Timing's report query 1.10 s."
     },
     {
-      "path": "images/sanitize-dark.png",
-      "alt": "Share without secrets: 28 secret values masked in 15 requests, and an agent digest showing authorization: Bearer [masked]."
+      "path": "images/shot-4-json-tree.png",
+      "alt": "A 2.4 kB JSON response in Tree view, Source a click away: 20 orders, the first opened to its id, customer, total and status."
+    },
+    {
+      "path": "images/shot-5-websocket.png",
+      "alt": "Follow one order: 4 of 19 socket messages match 48207, sent and received, one opened as JSON. Shown in Orca's light theme."
     }
   ],
   "engines": {
