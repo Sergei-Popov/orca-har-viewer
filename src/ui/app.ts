@@ -3,7 +3,7 @@
 // and swaps the HAR for its masked copy while "Mask secrets" is on.
 
 import { h, svg } from '../dom'
-import { count, formatBytes, formatMs } from '../format'
+import { count, formatBytes, formatMs, shownOf } from '../format'
 import type { SideFiles } from '../har/body'
 import { RESOURCE_TYPES, type ResourceType } from '../har/classify'
 import { maskedHarBytes, maskedHarZipSteps, maskingWeight, maskRecording, maskSteps, runSteps, runStepsAsync, type Masked } from '../har/masked'
@@ -398,7 +398,7 @@ export class HarApp {
     const data = this.data
     const summary = summarize(data.model, this.order, this.filter.page)
     const items: Node[] = []
-    items.push(h('span', {}, summary.count === summary.total ? s.requests(summary.total) : `${this.ctx.count(summary.count)} / ${s.requests(summary.total)}`))
+    items.push(h('span', {}, shownOf(summary.count, summary.total, s.requests, this.ctx.count)))
     items.push(h('span', {}, fill(s.transferred, { size: this.ctx.bytes(summary.transferred) })))
     items.push(h('span', {}, fill(s.resources, { size: this.ctx.bytes(summary.resources) })))
     if (summary.finish > 0) items.push(h('span', {}, fill(s.finish, { time: this.ctx.ms(summary.finish) })))

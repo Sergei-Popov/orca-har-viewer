@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { clockTime, count, dateTime, formatBytes, formatMs, tickStep, wrapPieces } from './format'
+import { clockTime, count, dateTime, formatBytes, formatMs, shownOf, tickStep, wrapPieces } from './format'
 import { splitLines, tokenize } from './highlight'
 import { parseCookieHeader, parseServerTiming, parseSetCookie, requestCookies, responseCookies } from './har/headers'
 import { fill, stringsFor } from './i18n'
@@ -250,4 +250,14 @@ test('review 19, 27: binary frames whose bytes are text are shown as text, other
   assert.equal(binary.text, null)
   assert.deepEqual(Array.from(binary.bytes!), [0, 1, 2, 3, 4])
   assert.equal(frameText({ type: 'send', time: 1, opcode: 1, data: 'hi' }).text, 'hi')
+})
+
+test('a filtered list counts what it keeps of all: requests and WebSocket messages alike', () => {
+  const en = stringsFor('en', true)
+  const ru = stringsFor('ru', true)
+  assert.equal(shownOf(19, 19, en.messages), '19 messages')
+  assert.equal(shownOf(4, 19, en.messages), '4 / 19 messages')
+  assert.equal(shownOf(4, 29, en.requests), '4 / 29 requests')
+  assert.equal(shownOf(0, 19, en.messages), '0 / 19 messages')
+  assert.equal(shownOf(1200, 15000, ru.messages, (n) => count(n, 'ru')), `${count(1200, 'ru')} / ${ru.messages(15000)}`)
 })

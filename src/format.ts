@@ -74,6 +74,11 @@ export function tickStep(span: number, target = 8): number {
   return power * 10
 }
 
+/** `29 requests`, or `4 / 29 requests` while a filter hides some: what the list counts. */
+export function shownOf(shown: number, total: number, noun: (n: number) => string, format: (n: number) => string = (n) => count(n)): string {
+  return shown === total ? noun(total) : `${format(shown)} / ${noun(total)}`
+}
+
 /**
  * Where a host name or URL may wrap in a narrow column: after dots, slashes (not inside `://`)
  * and query punctuation, so it reads `api.` / `example.com` rather than `api.ex` / `ample.com`.
