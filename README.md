@@ -12,7 +12,7 @@ secrets masked.
 | Files      | What opens                                                                        |
 | ---------- | --------------------------------------------------------------------------------- |
 | `.har`     | **HAR Viewer**, the default view                                                  |
-| `.har.zip` | **HAR Viewer**, the default view, with the body files inside (see below)          |
+| `.har.zip` | **HAR Viewer**, the default view unless Archive Viewer is installed (see below)   |
 
 It reads HAR 1.2 as Chrome, Edge, Firefox and Safari save it ("Save all as HAR"), as Playwright
 records it (`recordHar`, `routeFromHAR`, `.har.zip` with `content: 'attach'`), and as agent and
@@ -102,8 +102,8 @@ fonts, media, protobuf) and binary WebSocket frames are copied unchanged, and a 
 
 ## Limits
 
-- **Size.** Orca gives a plugin editor at most about 50 MiB (52,428,800 bytes) of a file and
-  shows its own notice for larger ones. A 48 MiB HAR with 9,000 requests opens in a second or
+- **Size.** Orca gives a plugin editor files of up to about 50 MiB (52,428,800 bytes). A larger
+  file never reaches the viewer: Orca shows its own notice in the tab instead. A 48 MiB HAR with 9,000 requests opens in a second or
   two; masking or searching bodies in a file that size takes a moment longer. A `.har.zip` can
   hold a HAR that unpacks to up to 256 MB.
 - **Damaged files.** A file cut off or broken in the middle opens with the requests that could
@@ -112,10 +112,11 @@ fonts, media, protobuf) and binary WebSocket frames are copied unchanged, and a 
 - **Bodies in separate files.** Playwright can save bodies as files next to a `.har`. Orca
   gives editors only the file they open, so those bodies show as unavailable; record to a
   `.har.zip` (or open the `.har.zip`) to see them.
-- **`.har.zip` with Archive Viewer.** Orca picks between plugins that both open a file by
-  default in the order of their ids, so when [Archive Viewer](https://github.com/Sergei-Popov/orca-archive-viewer)
-  is installed it opens `.har.zip` as an archive and HAR Viewer is offered as the other view
-  of the file.
+- **`.har.zip` with Archive Viewer.** When two plugins both open a file by default, Orca takes
+  the one whose id comes first, whatever the length of the suffix. So with
+  [Archive Viewer](https://github.com/Sergei-Popov/orca-archive-viewer) installed, a `.har.zip`
+  opens as an archive, and HAR Viewer is the other choice in the tab's view switcher. Orca
+  remembers that choice for the tab, not for the file type.
 - Read-only: it never changes the file.
 
 ## Privacy

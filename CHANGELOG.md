@@ -9,7 +9,8 @@ All notable changes to this plugin are documented here. The format follows
 
 ### Added
 
-- **HAR Viewer** custom editor, the default view for `.har` and `.har.zip`: read-only and
+- **HAR Viewer** custom editor, the default view for `.har` and `.har.zip` (Archive Viewer, when
+  installed, keeps `.har.zip` and offers HAR Viewer in the view switcher): read-only and
   offline. Reads HAR 1.2 from Chrome, Edge, Firefox, Safari, Playwright and agent tools with
   their extra fields, base64 bodies, missing or `-1` timings and requests without pages.
 - `.har.zip` from Playwright with bodies in separate files, unpacked in the tab (vendored
