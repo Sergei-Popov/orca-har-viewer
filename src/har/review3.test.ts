@@ -53,8 +53,8 @@ const LINE = new RegExp(String.raw`^(?:(?:curl --url|-X|-H|-b|--data-raw|--data-
 
 test('review 1: Copy as cURL drops header names that are not tokens, so no -H @file reaches curl', () => {
   const headers: HarNameValue[] = [
-    { name: '@.git-credentials', value: '1' },
-    { name: '@kube.yaml X-Other', value: '1' },
+    { name: '@notes.txt', value: '1' },
+    { name: '@local.cfg X-Other', value: '1' },
     { name: ':authority', value: 'e.test' },
     { name: 'x-ok', value: '2' }
   ]
@@ -68,8 +68,8 @@ test('review 1: Copy as cURL drops header names that are not tokens, so no -H @f
 
 test('review 1: NUL, CR or LF in a header, a control character in the URL or a method that is not a token refuse the copy', () => {
   const refused: HarEntry[] = [
-    // The verifier's input: bash and zsh cut $'@.git-credentials\x00X-Trace' at the NUL.
-    request({ headers: [{ name: `@.git-credentials${NUL}X-Trace`, value: '1' }] }),
+    // The verifier's shape: bash and zsh cut $'@notes.txt<NUL>X-Trace' at the NUL.
+    request({ headers: [{ name: `@notes.txt${NUL}X-Trace`, value: '1' }] }),
     request({ headers: [{ name: 'x-trace', value: `1${NUL}2` }] }),
     request({ headers: [{ name: 'x-trace', value: 'a\r\nx-other: b' }] }),
     request({ headers: [{ name: 'x-trace\n', value: '1' }] }),
@@ -95,7 +95,7 @@ test('review 1: NUL, CR or LF in a header, a control character in the URL or a m
 
 test('review 1: the URL goes in as --url, a cookie without "=" as a header, and every value as an option parameter', () => {
   // curl would read a bare '-K…' as an option; as the parameter of --url it is a URL.
-  assert.equal(lines(toCurl(request({ url: '-K/etc/passwd' }))!)[0], `curl --url '-K/etc/passwd'`)
+  assert.equal(lines(toCurl(request({ url: '-Kcurl.cfg' }))!)[0], `curl --url '-Kcurl.cfg'`)
   // curl reads a -b value without '=' as a cookie file.
   const file = toCurl(request({ headers: [{ name: 'Cookie', value: 'cookies.txt' }] }))!
   assert.ok(file.includes(`-H 'Cookie: cookies.txt'`) && !file.includes('-b '), file)
@@ -115,7 +115,7 @@ test('review 1: a body a shell cannot carry is left out, with a placeholder that
   const nul = toCurl(request({ method: 'POST', postData: { mimeType: 'text/plain; charset=utf-8', text: `a${NUL}b` } }))!
   assert.ok(nul.endsWith(`--data-binary '@<3 bytes of text/plain, not included>'`), nul)
   // The type of a binary body comes from the file: no '..', spaces, quotes or ';' get into the placeholder.
-  const bytes = toCurl(request({ method: 'POST', postData: { mimeType: "image/../../.ssh/id_rsa' x;y", encoding: 'base64', text: 'AAEC' } }))!
+  const bytes = toCurl(request({ method: 'POST', postData: { mimeType: "image/../../notes.txt' x;y", encoding: 'base64', text: 'AAEC' } }))!
   const placeholder = lines(bytes).at(-1)!
   assert.ok(placeholder.startsWith(`--data-binary '@<3 bytes of image/`), placeholder)
   assert.ok(!placeholder.includes('..') && !placeholder.includes(' x') && !placeholder.includes(';'), placeholder)
