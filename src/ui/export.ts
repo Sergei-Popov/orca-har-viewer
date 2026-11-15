@@ -82,6 +82,8 @@ export class ExportPopover {
       })
       const capped = n > EXPORT_CAP ? ` — ${fill(s.exportCapped, { n: EXPORT_CAP })}` : ''
       fieldset.append(h('label', { className: 'hv-check' }, radio, fill(label, { n: this.ctx.count(n) }) + capped))
+      // How to pick requests for the export, which the list itself does not say.
+      if (choice === 'selected') fieldset.append(h('span', { className: 'hv-note hv-hint' }, s.selectHint))
     }
     const bodies = h('input', { type: 'checkbox' })
     bodies.checked = this.bodies

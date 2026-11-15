@@ -63,6 +63,7 @@ export type HarResponse = {
   _transferSize?: number
   _error?: string | null
   _failureText?: string
+  comment?: string
 }
 
 export type HarTimings = {

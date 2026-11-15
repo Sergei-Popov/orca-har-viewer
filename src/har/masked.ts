@@ -2,7 +2,8 @@
 // text body files masked the same way, and the sanitized copy that "Save sanitized…" writes.
 
 import { zipSync } from '../../vendor/fflate/fflate.mjs'
-import { isTextual, type SideFiles } from './body'
+import { isMediaType, type SideFiles } from './body'
+import { isOauthUrl } from './mask-url'
 import { sanitizeHar, sanitizeSideFile, type Counter, type SanitizeReport } from './sanitize'
 import type { Har, HarEntry } from './types'
 
@@ -23,8 +24,9 @@ function fileRefs(entry: HarEntry): { name: string; mimeType: string }[] {
 }
 
 /**
- * Masks the HAR and, when the body files are at hand, every text body file. Binary files (images,
- * fonts, media, protobuf…) pass through unchanged. The input is never changed.
+ * Masks the HAR and, when the body files are at hand, every body file the viewer would show as
+ * text (by the same rule as inline bodies). Binary files pass through unchanged. The input is
+ * never changed.
  */
 export function maskRecording(har: Har, files?: SideFiles): Masked {
   const { har: masked, report } = sanitizeHar(har)
@@ -39,11 +41,13 @@ export function maskRecording(har: Har, files?: SideFiles): Masked {
         report.entries.add(index)
       }
     }
+    const oauth = typeof entry.request?.url === 'string' && isOauthUrl(entry.request.url)
     for (const ref of fileRefs(entry)) {
-      if (replaced.has(ref.name) || !isTextual(ref.mimeType) || !files.has(ref.name)) continue
+      // Images, audio, video and fonts are never text, so they need not even be unpacked.
+      if (replaced.has(ref.name) || isMediaType(ref.mimeType) || !files.has(ref.name)) continue
       const bytes = files.get(ref.name)
       if (!bytes) continue
-      const out = sanitizeSideFile(bytes, ref.mimeType, counter)
+      const out = sanitizeSideFile(bytes, ref.mimeType, counter, { oauth })
       if (out !== bytes) replaced.set(ref.name, out)
     }
   })
@@ -52,7 +56,8 @@ export function maskRecording(har: Har, files?: SideFiles): Masked {
     report,
     files: {
       has: (name) => files.has(name),
-      get: (name) => replaced.get(name) ?? files.get(name)
+      get: (name) => replaced.get(name) ?? files.get(name),
+      overBudget: (name) => !!files.overBudget?.(name)
     }
   }
 }
@@ -64,7 +69,8 @@ export function maskedHarText(masked: Masked): string {
 
 /**
  * A sanitized .har.zip: `har.har` and the body files its entries point to (masked text, binary
- * unchanged). Files nothing points to are left out, as they could hold anything.
+ * unchanged). Files nothing points to are left out, as they could hold anything, and so are files
+ * that could not be unpacked (past the archive's unpack budget): they could not be masked.
  */
 export function maskedHarZip(masked: Masked): Uint8Array {
   const contents: Record<string, Uint8Array | [Uint8Array, { level?: number }]> = {
@@ -76,7 +82,7 @@ export function maskedHarZip(masked: Masked): Uint8Array {
         if (ref.name in contents || ref.name === 'har.har') continue
         const bytes = masked.files.get(ref.name)
         // Already-compressed media gains nothing from deflate.
-        if (bytes) contents[ref.name] = [bytes, { level: isTextual(ref.mimeType) ? 6 : 0 }]
+        if (bytes) contents[ref.name] = [bytes, { level: isMediaType(ref.mimeType) ? 0 : 6 }]
       }
     }
   }

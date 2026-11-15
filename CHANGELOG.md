@@ -27,9 +27,15 @@ All notable changes to this plugin are documented here. The format follows
 - An overview with totals, requests by type and status, a per-domain table that filters the
   list, and the slowest, largest and failed requests; a summary strip under the list.
 - Copy as cURL and as fetch; "Export for agent", a Markdown digest of selected, failed or
-  listed requests with bodies cut and secrets masked, to copy or save.
+  listed requests with bodies cut and known secret patterns masked, to copy or save.
 - "Mask secrets" with a banner counting what was masked, and "Save sanitized…" for a masked
-  `.har` or `.har.zip`.
+  `.har` or `.har.zip`. Masking knows credential headers and cookies, secret-named parameters,
+  form fields (urlencoded, multipart, plain text) and JSON keys, OAuth codes in OAuth flows,
+  SAML messages, URLs nested in values and token shapes anywhere; it masks JSON in place
+  (64-bit integers and spacing stay), every body the viewer shows as text whatever its type
+  (written back in its encoding), SignalR and Socket.IO frames, page titles, comments and
+  vendor fields.
+- A `.har.zip` unpacks its body files on demand, within 512 MB together.
 - Messages for empty, non-JSON and non-HAR files; cut-off and damaged files open with what
   could be read and say where they break.
 - English and Russian, following Orca's language; light and dark themes; the tab icon.

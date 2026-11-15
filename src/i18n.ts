@@ -22,7 +22,7 @@ const en = {
   scopeHint: 'Where words are looked up',
   scopes: { url: 'URL', headers: 'URL and headers', all: 'Everything, with bodies' },
   all: 'All',
-  chipHint: 'Show one type; ⌘-click or Ctrl-click to add another',
+  chipHint: 'Show one type; ⌘-click to add another',
   types: { fetch: 'Fetch/XHR', doc: 'Doc', js: 'JS', css: 'CSS', img: 'Img', font: 'Font', media: 'Media', ws: 'WS', wasm: 'Wasm', other: 'Other' },
   errorsOnly: 'Errors',
   errorsHint: 'Only 4xx and 5xx responses and failed requests',
@@ -32,11 +32,11 @@ const en = {
   allDomains: 'All domains',
   domainHint: 'Requests to one domain',
   mask: 'Mask secrets',
-  maskHint: 'Hide authorization headers, cookies, keys and tokens in the view, in copies and in exports',
+  maskHint: 'Mask known secret patterns (authorization headers, cookies, keys, tokens) in the view, in copies and in exports. Review before sharing.',
   export: 'Export for agent',
-  exportHint: 'A short Markdown digest of requests for a coding agent, with secrets masked',
+  exportHint: 'A short Markdown digest of requests for a coding agent, with known secret patterns masked',
   saveSanitized: 'Save sanitized…',
-  saveSanitizedHint: 'Save a copy of this HAR with every secret masked',
+  saveSanitizedHint: 'Save a copy of this HAR with known secret patterns masked. Binary bodies are copied as they are: review the copy before sharing it.',
   columns: {
     status: 'Status',
     method: 'Method',
@@ -53,7 +53,6 @@ const en = {
   failed: '(failed)',
   caches: { memory: '(memory cache)', disk: '(disk cache)', 'service worker': '(service worker)', cache: '(cache)' } as Record<string, string>,
   requests: enPlural('request', 'requests'),
-  shownOf: '{shown} of {total}',
   transferred: '{size} transferred',
   resources: '{size} resources',
   finish: 'Finish: {time}',
@@ -61,6 +60,7 @@ const en = {
   page: 'Page',
   domContentLoaded: 'DOMContentLoaded: {time}',
   load: 'Load: {time}',
+  loadLabel: 'Load',
   errors: enPlural('error', 'errors'),
   slowest: 'Slowest:',
   largest: 'Largest:',
@@ -68,7 +68,7 @@ const en = {
   secrets: enPlural('secret value', 'secret values'),
   inRequests: enPlural('request', 'requests'),
   maskedBanner: '{secrets} masked in {requests}. The view, copies and exports show [masked].',
-  maskedNone: 'Secrets are masked. Nothing that looks secret was found.',
+  maskedNone: 'Masking is on. Nothing matched the known secret patterns; review before sharing.',
   showValues: 'Show values',
   truncated: 'The file is cut off at line {line}, column {column}. Showing the {count} before the cut.',
   invalid: 'The JSON breaks at line {line}, column {column}: {message}. Showing the {count} that could be read.',
@@ -125,6 +125,7 @@ const en = {
   emptyBody: 'The body is empty.',
   externalFile: 'The body is in a separate file, {file}, which Orca does not give to editors.',
   missingFile: 'The body file {file} is not in this archive.',
+  overBudgetFile: '{file} is not unpacked: the body files of this archive unpack to more than 512 MB together.',
   bodyCut: 'Showing the first {size} of {total}.',
   binary: 'Binary data. The first {size} as hex:',
   mediaMuted: 'Muted. Use the controls to play it.',
@@ -153,6 +154,7 @@ const en = {
   timingNote: 'Phases the HAR does not record, or records as -1, show as —.',
   messages: enPlural('message', 'messages'),
   filterMessages: 'Filter messages',
+  moreMessages: 'Show {n} more',
   data: 'Data',
   length: 'Length',
   time: 'Time',
@@ -169,8 +171,9 @@ const en = {
   startedRequests: 'Requests it started',
   noInitiator: 'The HAR records no initiator for this request.',
   overview: 'Overview',
+  recorded: 'Recorded by {creator} on {date}',
   recordedBy: 'Recorded by {creator}',
-  recordedOn: 'on {date}',
+  recordedOn: 'Recorded on {date}',
   overviewHint: 'Select a request to see its headers, body and timing. ↑ ↓ move through the list, Esc comes back here.',
   byType: 'Requests by type',
   byStatus: 'Status codes',
@@ -190,11 +193,11 @@ const en = {
   exportBodies: 'Include bodies, cut to {n} characters',
   exportCopy: 'Copy Markdown',
   exportSave: 'Save .md…',
-  exportNote: 'Secrets are always masked in the export.',
+  exportNote: 'Known secret patterns are always masked in the export.',
   characters: enPlural('character', 'characters'),
   exportCopied: 'Markdown copied',
   exportManual: 'Copying was refused. The Markdown below is selected: press ⌘C.',
-  saved: 'Saved',
+  saved: 'Saved with known secret patterns masked. Review it before sharing.',
   saveFailed: 'Could not save the file',
   saveTooBig: 'The copy is over 64 MB, more than Orca saves from a plugin.',
   working: 'Masking secrets…',
@@ -212,7 +215,7 @@ const ru: Strings = {
   scopeHint: 'Где искать слова',
   scopes: { url: 'URL', headers: 'URL и заголовки', all: 'Везде, с телами' },
   all: 'Все',
-  chipHint: 'Показать один тип; ⌘-щелчок или Ctrl-щелчок добавляет ещё',
+  chipHint: 'Показать один тип; ⌘-щелчок добавляет ещё',
   types: { fetch: 'Fetch/XHR', doc: 'Документы', js: 'JS', css: 'CSS', img: 'Картинки', font: 'Шрифты', media: 'Медиа', ws: 'WS', wasm: 'Wasm', other: 'Прочее' },
   errorsOnly: 'Ошибки',
   errorsHint: 'Только ответы 4xx и 5xx и запросы с ошибкой',
@@ -222,11 +225,11 @@ const ru: Strings = {
   allDomains: 'Все домены',
   domainHint: 'Запросы к одному домену',
   mask: 'Скрыть секреты',
-  maskHint: 'Скрыть заголовки авторизации, куки, ключи и токены в просмотре, копиях и экспорте',
+  maskHint: 'Скрыть известные шаблоны секретов (заголовки авторизации, куки, ключи, токены) в просмотре, копиях и экспорте. Проверьте, прежде чем делиться.',
   export: 'Экспорт для агента',
-  exportHint: 'Короткая сводка запросов в Markdown для агента, секреты скрыты',
+  exportHint: 'Короткая сводка запросов в Markdown для агента, известные шаблоны секретов скрыты',
   saveSanitized: 'Сохранить без секретов…',
-  saveSanitizedHint: 'Сохранить копию этого HAR со скрытыми секретами',
+  saveSanitizedHint: 'Сохранить копию этого HAR, скрыв известные шаблоны секретов. Двоичные тела копируются как есть: проверьте копию, прежде чем делиться.',
   columns: {
     status: 'Статус',
     method: 'Метод',
@@ -243,14 +246,14 @@ const ru: Strings = {
   failed: '(сбой)',
   caches: { memory: '(кэш в памяти)', disk: '(кэш на диске)', 'service worker': '(service worker)', cache: '(кэш)' },
   requests: ruPlural('запрос', 'запроса', 'запросов'),
-  shownOf: '{shown} из {total}',
   transferred: 'передано {size}',
   resources: 'ресурсов {size}',
   finish: 'Готово: {time}',
   finishLabel: 'Готово',
   page: 'Страница',
   domContentLoaded: 'DOMContentLoaded: {time}',
-  load: 'Load: {time}',
+  load: 'Загрузка: {time}',
+  loadLabel: 'Загрузка',
   errors: ruPlural('ошибка', 'ошибки', 'ошибок'),
   slowest: 'Самый долгий:',
   largest: 'Самый большой:',
@@ -258,7 +261,7 @@ const ru: Strings = {
   secrets: ruPlural('секретное значение', 'секретных значения', 'секретных значений'),
   inRequests: ruPlural('запросе', 'запросах', 'запросах'),
   maskedBanner: 'Скрыто: {secrets} в {requests}. В просмотре, копиях и экспорте — [masked].',
-  maskedNone: 'Секреты скрыты. Ничего похожего на секреты не нашлось.',
+  maskedNone: 'Скрытие включено. Известных шаблонов секретов не нашлось; проверьте, прежде чем делиться.',
   showValues: 'Показать значения',
   truncated: 'Файл обрывается на строке {line}, столбце {column}. Показаны {count} до обрыва.',
   invalid: 'JSON повреждён на строке {line}, столбце {column}: {message}. Показаны {count}, которые удалось прочитать.',
@@ -315,6 +318,7 @@ const ru: Strings = {
   emptyBody: 'Тело пустое.',
   externalFile: 'Тело лежит в отдельном файле {file}, а его Orca редакторам не передаёт.',
   missingFile: 'Файла тела {file} нет в этом архиве.',
+  overBudgetFile: 'Файл {file} не распакован: тела этого архива вместе распаковываются больше чем в 512 МБ.',
   bodyCut: 'Показаны первые {size} из {total}.',
   binary: 'Двоичные данные. Первые {size} в шестнадцатеричном виде:',
   mediaMuted: 'Звук выключен. Воспроизведение — кнопками плеера.',
@@ -339,10 +343,11 @@ const ru: Strings = {
   phaseGroups: { setup: 'Установка соединения', request: 'Запрос и ответ' },
   total: 'Всего',
   startedAfter: 'Начало в {clock}, через {offset} после первого запроса',
-  serverTiming: 'Server timing',
+  serverTiming: 'Время на сервере',
   timingNote: 'Фазы, которых нет в HAR или записанные как -1, показаны как —.',
   messages: ruPlural('сообщение', 'сообщения', 'сообщений'),
   filterMessages: 'Фильтр сообщений',
+  moreMessages: 'Показать ещё {n}',
   data: 'Данные',
   length: 'Длина',
   time: 'Время',
@@ -359,8 +364,9 @@ const ru: Strings = {
   startedRequests: 'Запросы, которые он вызвал',
   noInitiator: 'Инициатор этого запроса в HAR не записан.',
   overview: 'Обзор',
+  recorded: 'Записано: {creator}, {date}',
   recordedBy: 'Записано: {creator}',
-  recordedOn: '{date}',
+  recordedOn: 'Записано {date}',
   overviewHint: 'Выберите запрос, чтобы увидеть его заголовки, тело и тайминги. ↑ ↓ — по списку, Esc — обратно сюда.',
   byType: 'Запросы по типам',
   byStatus: 'Коды статуса',
@@ -380,11 +386,11 @@ const ru: Strings = {
   exportBodies: 'С телами, обрезанными до {n} символов',
   exportCopy: 'Копировать Markdown',
   exportSave: 'Сохранить .md…',
-  exportNote: 'В экспорте секреты скрыты всегда.',
+  exportNote: 'В экспорте известные шаблоны секретов скрыты всегда.',
   characters: ruPlural('символ', 'символа', 'символов'),
   exportCopied: 'Markdown скопирован',
   exportManual: 'Копирование запрещено. Markdown ниже выделен: нажмите ⌘C.',
-  saved: 'Сохранено',
+  saved: 'Сохранено, известные шаблоны секретов скрыты. Проверьте копию, прежде чем делиться.',
   saveFailed: 'Не удалось сохранить файл',
   saveTooBig: 'Копия больше 64 МБ — больше, чем Orca сохраняет из плагина.',
   working: 'Скрываю секреты…',
@@ -392,9 +398,37 @@ const ru: Strings = {
   units: { b: 'Б', kb: 'кБ', mb: 'МБ', gb: 'ГБ', ms: 'мс', s: 'с', min: 'мин' }
 }
 
-/** Strings for a BCP-47 tag: Russian for `ru*`, English otherwise. */
-export function stringsFor(locale: string | undefined): Strings {
-  return isRussian(locale) ? ru : en
+const tables = new Map<string, Strings>()
+
+/**
+ * Strings for a BCP-47 tag: Russian for `ru*`, English otherwise. The tables name Mac keys (⌘F,
+ * ⌘-click); everywhere else they read Ctrl+F and Ctrl-click.
+ */
+export function stringsFor(locale: string | undefined, mac = isMac()): Strings {
+  const base = isRussian(locale) ? ru : en
+  if (mac) return base
+  const key = base === ru ? 'ru' : 'en'
+  let table = tables.get(key)
+  if (!table) {
+    table = withCtrl(base) as Strings
+    tables.set(key, table)
+  }
+  return table
+}
+
+/** Whether the frame runs on macOS, iOS or iPadOS, where the command key is ⌘. */
+export function isMac(): boolean {
+  const nav = (globalThis as { navigator?: Navigator & { userAgentData?: { platform?: string } } }).navigator
+  const platform = nav?.userAgentData?.platform || nav?.platform || nav?.userAgent || ''
+  return /mac|iphone|ipad|darwin/i.test(platform)
+}
+
+function withCtrl(value: unknown): unknown {
+  if (typeof value === 'string') return value.replace(/⌘-/g, 'Ctrl-').replace(/⌘(?=[A-Z])/g, 'Ctrl+')
+  if (typeof value !== 'object' || value === null) return value
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) out[key] = withCtrl(item)
+  return out
 }
 
 export function isRussian(locale: string | undefined): boolean {

@@ -2,8 +2,13 @@ import { assert, test } from 'orca/testing'
 import { clockTime, count, dateTime, formatBytes, formatMs, tickStep } from './format'
 import { splitLines, tokenize } from './highlight'
 import { parseCookieHeader, parseServerTiming, parseSetCookie, requestCookies, responseCookies } from './har/headers'
-import { stringsFor } from './i18n'
-import { hexDump, preview } from './ui/viewers'
+import { fill, stringsFor } from './i18n'
+import { encodeBase64, parseJson } from './har/body'
+import { frameText } from './har/frames'
+import { maskRecording } from './har/masked'
+import { buildModel } from './har/model'
+import { pageChoices } from './ui/choices'
+import { hexDump, preview, sourceText } from './ui/viewers'
 
 test('sizes and durations', () => {
   assert.equal(formatBytes(0), '0 B')
@@ -78,13 +83,13 @@ test('lines split across tokens', () => {
 })
 
 test('both languages have every string', () => {
-  const en = stringsFor('en')
-  const ru = stringsFor('ru-RU')
+  const en = stringsFor('en', true)
+  const ru = stringsFor('ru-RU', true)
   assert.notEqual(en, ru)
   const keys = (o: object): string[] =>
     Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v).map((s) => `${k}.${s}`) : [k]))
   assert.deepEqual(keys(ru).sort(), keys(en).sort())
-  assert.equal(stringsFor(undefined), en)
+  assert.equal(stringsFor(undefined, true), stringsFor('en', true))
   assert.equal(en.requests(1), '1 request')
   assert.equal(ru.requests(1), '1 запрос')
   assert.equal(ru.requests(3), '3 запроса')
@@ -130,4 +135,101 @@ test('hex dump and JSON previews', () => {
   assert.equal(preview({ id: 42, name: 'Demo', tags: ['a'], meta: { x: 1 } }), '{id: 42, name: "Demo", tags: Array(1), meta: {…}}')
   assert.equal(preview([1, 2, 3]), 'Array(3)')
   assert.ok(preview({ description: 'x'.repeat(100), more: 1, other: 2, again: 3, fifth: 'abcdefghijklmnopqrstuvwxyz' }).endsWith('…}'))
+})
+
+/** Every string of a table, by its path. */
+function leaves(table: object, prefix = ''): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const [key, value] of Object.entries(table)) {
+    if (typeof value === 'string') out.set(prefix + key, value)
+    else if (value && typeof value === 'object') for (const [k, v] of leaves(value, `${prefix}${key}.`)) out.set(k, v)
+  }
+  return out
+}
+
+test('review 24: the Russian table has no English left but names that stay as they are', () => {
+  const en = leaves(stringsFor('en', true))
+  const ru = leaves(stringsFor('ru', true))
+  // Protocol and technical names that read the same in both languages.
+  const same = new Set([
+    'scopes.url',
+    'types.fetch',
+    'types.js',
+    'types.css',
+    'types.ws',
+    'types.wasm',
+    'domContentLoaded',
+    'columns.url',
+    'cookie.httpOnly',
+    'cookie.secure',
+    'cookie.sameSite',
+    'opcodes.9',
+    'opcodes.10',
+    'caches.service worker'
+  ])
+  const untranslated = [...en].filter(([key, value]) => ru.get(key) === value && !same.has(key) && /[a-z]{3}/.test(value)).map(([key]) => key)
+  assert.deepEqual(untranslated, [])
+  const s = stringsFor('ru', true)
+  assert.equal(fill(s.load, { time: '1,31 с' }), 'Загрузка: 1,31 с')
+  assert.equal(s.loadLabel, 'Загрузка')
+  assert.equal(fill(s.recorded, { creator: 'Chrome 131.0.6778.86', date: '2026-11-15 09:41' }), 'Записано: Chrome 131.0.6778.86, 2026-11-15 09:41')
+})
+
+test('review 26: shortcut labels name ⌘ on a Mac and Ctrl everywhere else', () => {
+  for (const locale of ['en', 'ru']) {
+    const mac = leaves(stringsFor(locale, true))
+    const other = leaves(stringsFor(locale, false))
+    assert.ok(mac.get('filterHint')!.includes('⌘F') && mac.get('copyFailed')!.includes('⌘C'))
+    assert.deepEqual([...other.values()].filter((v) => v.includes('⌘')), [], locale)
+    assert.ok(other.get('filterHint')!.includes('Ctrl+F') && other.get('exportManual')!.includes('Ctrl+C') && other.get('selectHint')!.includes('Ctrl-'))
+  }
+  assert.equal(stringsFor('en', false).requests(2), '2 requests', 'plurals survive the copy')
+})
+
+test('review 27: no string promises that every secret is masked', () => {
+  for (const locale of ['en', 'ru']) {
+    for (const [key, value] of leaves(stringsFor(locale, true))) assert.ok(!/every secret|all secrets|все секреты/i.test(value), `${locale}.${key}`)
+  }
+  assert.ok(/known secret patterns/.test(stringsFor('en', true).saveSanitizedHint) && /review/.test(stringsFor('en', true).saveSanitizedHint))
+})
+
+test('review 5, 7: the page menu lists the titles of the dataset on screen, masked when masking is on', () => {
+  const har = {
+    log: {
+      pages: [
+        { id: 'page_1', title: 'https://app.example.com/?session=abc123def', startedDateTime: '2026-11-15T10:00:00.000Z' },
+        { id: 'page_2', title: 'https://app.example.com/reset?token=SuperSecretToken9', startedDateTime: '2026-11-15T10:00:01.000Z' }
+      ],
+      entries: [
+        { pageref: 'page_1', request: { method: 'GET', url: 'https://app.example.com/' }, response: { status: 200 } },
+        { request: { method: 'GET', url: 'https://cdn.example.com/x.js' }, response: { status: 200 } }
+      ]
+    }
+  }
+  const plain = pageChoices(buildModel(har), 'Without a page')
+  const masked = pageChoices(buildModel(maskRecording(har).har), 'Without a page')
+  assert.deepEqual(plain.map((c) => c.value), ['=page_1', '=page_2', '-'])
+  assert.deepEqual(masked.map((c) => c.value), ['=page_1', '=page_2', '-'], 'the same ids, so the selection carries over')
+  assert.deepEqual(masked.map((c) => c.label), ['https://app.example.com/?session=[masked]', 'https://app.example.com/reset?token=[masked]', 'Without a page'])
+})
+
+test('review 18, 13: the Source view indents deep or 64-bit JSON without throwing or rounding', () => {
+  const deep = `${'['.repeat(10_000)}1${']'.repeat(10_000)}`
+  assert.equal(sourceText(deep, true), deep, 'too deep to indent: shown as it is')
+  const ids = '{"id":1234567890123456789,"price":1.10,"tags":["a","b"],"nested":{"big":12345678901234567890}}'
+  assert.equal(sourceText(ids, true), '{\n  "id": 1234567890123456789,\n  "price": 1.10,\n  "tags": [\n    "a",\n    "b"\n  ],\n  "nested": {\n    "big": 12345678901234567890\n  }\n}')
+  // The tree keeps the literal of numbers a double would round.
+  const value = parseJson(ids) as Record<string, unknown>
+  assert.equal(String(value.id), '1234567890123456789')
+  assert.equal(value.price, 1.1)
+  assert.equal(preview(value), '{id: 1234567890123456789, price: 1.1, tags: Array(2), nested: {…}}')
+})
+
+test('review 19, 27: binary frames whose bytes are text are shown as text, other binary as bytes', () => {
+  const text = frameText({ type: 'receive', time: 1, opcode: 2, data: encodeBase64(new TextEncoder().encode('{"ok":true}')) })
+  assert.equal(text.text, '{"ok":true}')
+  const binary = frameText({ type: 'receive', time: 1, opcode: 2, data: 'AAECAwQ=' })
+  assert.equal(binary.text, null)
+  assert.deepEqual(Array.from(binary.bytes!), [0, 1, 2, 3, 4])
+  assert.equal(frameText({ type: 'send', time: 1, opcode: 1, data: 'hi' }).text, 'hi')
 })

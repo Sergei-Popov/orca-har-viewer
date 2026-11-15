@@ -374,6 +374,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 }
 .hv-pop .hv-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
 .hv-pop .hv-note { color: var(--muted-fg); flex: 1; }
+.hv-pop .hv-hint { margin: -2px 0 2px 22px; font-size: 11px; }
 
 /* Toast and loading */
 .hv-toast {

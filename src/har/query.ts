@@ -77,6 +77,12 @@ export function parseQuery(text: string): Term[] {
 }
 
 /** Text an entry is searched in, per scope; built on first use and kept. */
+/**
+ * Characters of each body (and of an entry's WebSocket frames together) that search looks at:
+ * far more than real bodies have, and it keeps a crafted archive from holding gigabytes of text.
+ */
+export const SEARCH_BODY_CHARS = 2 * 1024 * 1024
+
 export class Haystacks {
   private readonly url = new Map<number, string>()
   private readonly headers = new Map<number, string>()
@@ -123,11 +129,21 @@ export class Haystacks {
       const parts: string[] = []
       for (const body of [requestBody(entry.raw, this.files), responseBody(entry.raw, this.files)]) {
         const value = bodyText(body)
-        if (value) parts.push(value)
+        if (value) parts.push(value.length > SEARCH_BODY_CHARS ? value.slice(0, SEARCH_BODY_CHARS) : value)
       }
       const messages = entry.raw._webSocketMessages
-      if (Array.isArray(messages)) for (const m of messages) if (m && typeof m.data === 'string') parts.push(m.data)
-      text = parts.join('\n').toLowerCase()
+      let room = SEARCH_BODY_CHARS
+      if (Array.isArray(messages)) {
+        for (const m of messages) {
+          if (room <= 0) break
+          if (!m || typeof m.data !== 'string') continue
+          const data = m.data.length > room ? m.data.slice(0, room) : m.data
+          parts.push(data)
+          room -= data.length
+        }
+      }
+      // Two parts at least, so the join copies: a slice alone could keep its whole body alive.
+      text = ['', ...parts].join('\n').toLowerCase()
       this.bodies.set(entry.index, text)
     }
     return text
@@ -215,10 +231,19 @@ export function filterEntries(model: Model, filter: FilterState, haystacks: Hays
     if (filter.errorsOnly && !entry.isError) continue
     if (filter.page !== null && entry.pageId !== filter.page) continue
     if (filter.domain !== null && entry.host !== filter.domain) continue
-    if (terms.length && !matchesTerms(entry, terms, filter.scope, haystacks)) continue
+    if (terms.length && !safeMatches(entry, terms, filter.scope, haystacks)) continue
     out.push(entry.index)
   }
   return out
+}
+
+/** An entry whose text cannot be searched (a body the engine cannot hold as a string) does not match. */
+function safeMatches(entry: Entry, terms: Term[], scope: Scope, haystacks: Haystacks): boolean {
+  try {
+    return matchesTerms(entry, terms, scope, haystacks)
+  } catch {
+    return false
+  }
 }
 
 function matchesTerms(entry: Entry, terms: Term[], scope: Scope, haystacks: Haystacks): boolean {

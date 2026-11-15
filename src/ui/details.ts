@@ -3,7 +3,8 @@
 
 import { append, h, maskedText, svg } from '../dom'
 import { clockTime } from '../format'
-import { requestBody, responseBody, parseJson } from '../har/body'
+import { parseJson, requestBody, responseBody } from '../har/body'
+import { frameText, type FrameText } from '../har/frames'
 import { toCurl, toFetch } from '../har/copy'
 import { parseServerTiming, requestCookies, responseCookies } from '../har/headers'
 import type { Entry } from '../har/model'
@@ -11,7 +12,7 @@ import type { HarCookie, HarNameValue, HarStack, HarWebSocketMessage } from '../
 import { fill } from '../i18n'
 import { icon } from '../icons'
 import { copyText, headerRows, iconButton, kvList, note, section, type Ctx, type Dataset } from './common'
-import { bodyView, jsonTree, sourceView, type Track, type ViewPrefs } from './viewers'
+import { bodyView, hexView, jsonTree, sourceView, type Track, type ViewPrefs } from './viewers'
 
 export type DetailTab = 'headers' | 'payload' | 'response' | 'cookies' | 'timing' | 'messages' | 'initiator'
 
@@ -376,36 +377,68 @@ export class DetailsPane {
     const list = h('div', { className: 'hv-msg-list' })
     const detail = h('div', { className: 'hv-msg-detail' }, note(s.selectMessage))
     let chosen: HTMLElement | null = null
-    const label = (m: HarWebSocketMessage) => (m.opcode && m.opcode !== 1 && s.opcodes[m.opcode]) || (m.data ?? '')
+    // Icons parsed once and cloned; frame text lowercased once, when the filter first needs it.
+    const icons = { send: svg(icon('up')), receive: svg(icon('down')) }
+    const lower: (string | undefined)[] = []
+    const texts = new Map<number, FrameText>()
+    const textOf = (i: number) => {
+      let text = texts.get(i)
+      if (!text) texts.set(i, (text = frameText(messages[i])))
+      return text
+    }
+    const row = (i: number) => {
+      const message = messages[i]
+      const data = message.data ?? ''
+      const text = textOf(i)
+      const send = message.type === 'send'
+      const binary = message.opcode !== undefined && message.opcode !== 1
+      const label = binary ? `${s.opcodes[message.opcode as number] ?? message.opcode}${text.text !== null ? ` · ${text.text}` : ''}` : data
+      const tr = h(
+        'tr',
+        { className: 'hv-clickable' },
+        h('td', { className: send ? 'hv-dir-send' : 'hv-dir-receive', title: send ? s.sent : s.received }, (send ? icons.send : icons.receive).cloneNode(true)),
+        h('td', { className: 'hv-msg-data' }, maskedText(label.slice(0, 300))),
+        h('td', { className: 'hv-num' }, this.ctx.count(text.bytes ? text.bytes.length : data.length)),
+        h('td', { className: 'hv-num' }, typeof message.time === 'number' ? clockTime(message.time * 1000) : '')
+      )
+      tr.addEventListener('click', () => {
+        chosen?.classList.remove('hv-active')
+        chosen = tr
+        tr.classList.add('hv-active')
+        detail.replaceChildren(frameView(message, textOf(i), this.ctx))
+      })
+      return tr
+    }
     const render = () => {
       const needle = this.messageFilter.toLowerCase()
       const table = h('table', { className: 'hv-table' }, h('tr', {}, h('th', {}), h('th', {}, s.data), h('th', { className: 'hv-num' }, s.length), h('th', { className: 'hv-num' }, s.time)))
-      for (const message of messages) {
-        const data = message.data ?? ''
-        if (needle && !data.toLowerCase().includes(needle)) continue
-        const send = message.type === 'send'
-        const tr = h(
-          'tr',
-          { className: 'hv-clickable' },
-          h('td', { className: send ? 'hv-dir-send' : 'hv-dir-receive', title: send ? s.sent : s.received }, svg(icon(send ? 'up' : 'down'))),
-          h('td', { className: 'hv-msg-data' }, maskedText(label(message).slice(0, 300))),
-          h('td', { className: 'hv-num' }, this.ctx.count(data.length)),
-          h('td', { className: 'hv-num' }, typeof message.time === 'number' ? clockTime(message.time * 1000) : '')
-        )
-        tr.addEventListener('click', () => {
-          chosen?.classList.remove('hv-active')
-          chosen = tr
-          tr.classList.add('hv-active')
-          const json = data.trim().startsWith('{') || data.trim().startsWith('[') ? parseJson(data) : undefined
-          detail.replaceChildren(json !== undefined ? jsonTree(json) : message.opcode === 1 || !message.opcode ? sourceView(data, 'text', this.ctx, true) : note(`${label(message)} · ${data}`))
-        })
-        table.append(tr)
+      const matches: number[] = []
+      for (let i = 0; i < messages.length; i++) {
+        if (needle && !(lower[i] ??= (messages[i].data ?? '').toLowerCase()).includes(needle)) continue
+        matches.push(i)
       }
+      // Rows a page at a time: a long-lived socket can hold tens of thousands of frames.
+      let shown = 0
+      const more = h('button', { type: 'button', className: 'hv-more' })
+      const moreRow = h('tr', {}, h('td', { colspan: 4 }, more))
+      const page = () => {
+        moreRow.remove()
+        const to = Math.min(matches.length, shown + MESSAGE_PAGE)
+        for (; shown < to; shown++) table.append(row(matches[shown]))
+        if (shown < matches.length) {
+          more.textContent = fill(s.moreMessages, { n: this.ctx.count(Math.min(MESSAGE_PAGE, matches.length - shown)) })
+          table.append(moreRow)
+        }
+      }
+      more.addEventListener('click', page)
+      page()
       list.replaceChildren(table)
     }
+    let timer = 0
     input.addEventListener('input', () => {
       this.messageFilter = input.value
-      render()
+      clearTimeout(timer)
+      timer = window.setTimeout(render, FILTER_DELAY)
     })
     render()
     root.append(h('div', { className: 'hv-subbar' }, input, h('span', {}, s.messages(messages.length))), list, detail)
@@ -488,4 +521,20 @@ function safeDecode(value: string): string {
   } catch {
     return value
   }
+}
+
+/** Frames built per page of the Messages tab. */
+const MESSAGE_PAGE = 500
+/** Typing pause before the message filter runs, as for the request filter. */
+const FILTER_DELAY = 150
+
+function frameView(message: HarWebSocketMessage, frame: FrameText, ctx: Ctx): Node {
+  const text = frame.text
+  if (text !== null) {
+    const start = text.trimStart()[0]
+    const json = start === '{' || start === '[' ? parseJson(text) : undefined
+    return json !== undefined ? jsonTree(json) : sourceView(text, 'text', ctx, true)
+  }
+  if (frame.bytes) return hexView(frame.bytes, ctx)
+  return note(`${ctx.strings.opcodes[message.opcode as number] ?? message.opcode}${message.data ? ` · ${message.data}` : ''}`)
 }

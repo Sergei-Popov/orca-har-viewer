@@ -14,6 +14,7 @@ import { summarize } from '../har/summary'
 import type { Har } from '../har/types'
 import { fill, type Strings } from '../i18n'
 import { icon } from '../icons'
+import { pageChoices } from './choices'
 import { typingInto, type Ctx, type Dataset, type SaveAs } from './common'
 import { DetailsPane } from './details'
 import { ExportPopover } from './export'
@@ -254,17 +255,15 @@ export class HarApp {
     })
   }
 
+  /** The toolbar menus, from the dataset on screen: page titles are masked when masking is on. */
   private fillControls(): void {
     const s = this.s
-    const model = (this.plain as View).model
+    const model = this.data.model
     this.search.value = this.filter.text
     this.scope.value = this.filter.scope
-    const pageOptions = [h('option', { value: '*' }, s.allPages)]
-    for (const page of model.pages) pageOptions.push(h('option', { value: `=${page.id}` }, page.title.length > 60 ? `${page.title.slice(0, 60)}…` : page.title))
-    const withoutPage = model.entries.some((e) => !e.pageId)
-    if (withoutPage && model.pages.length) pageOptions.push(h('option', { value: '-' }, s.noPage))
-    this.pageSelect.replaceChildren(...pageOptions)
-    this.pageSelect.hidden = model.pages.length < 2 && !(withoutPage && model.pages.length)
+    const pages = pageChoices(model, s.noPage)
+    this.pageSelect.replaceChildren(h('option', { value: '*' }, s.allPages), ...pages.map((page) => h('option', { value: page.value }, page.label)))
+    this.pageSelect.hidden = pages.length < 2
     this.pageSelect.value = this.filter.page === null ? '*' : this.filter.page === '' ? '-' : `=${this.filter.page}`
     const domainOptions = [h('option', { value: '*' }, s.allDomains)]
     for (const domain of model.domains) domainOptions.push(h('option', { value: `=${domain.host}` }, `${domain.host || '—'} (${this.ctx.count(domain.count)})`))
@@ -546,6 +545,7 @@ export class HarApp {
     }
     this.masking = on
     this.detailsKey = ''
+    this.fillControls()
     this.refresh()
   }
 

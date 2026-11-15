@@ -3,7 +3,8 @@
 // scripts; audio and video start muted and never play by themselves.
 
 import { h, maskedText, svg } from '../dom'
-import { charsetOf, decodeText, looksLikeText, parseJson, viewKind, type Body, type ViewKind } from '../har/body'
+import { JsonNumber, parseJson, viewKind, type Body, type ViewKind } from '../har/body'
+import { reindentJson } from '../har/json-text'
 import { languageOf, splitLines, tokenize, type Language, type Token } from '../highlight'
 import { fill } from '../i18n'
 import { icon } from '../icons'
@@ -75,7 +76,7 @@ export function hexDump(bytes: Uint8Array, limit = HEX_LIMIT): string {
   return lines.join('\n')
 }
 
-function hexView(bytes: Uint8Array, ctx: Ctx): HTMLElement {
+export function hexView(bytes: Uint8Array, ctx: Ctx): HTMLElement {
   const shown = Math.min(bytes.length, HEX_LIMIT)
   return h(
     'div',
@@ -95,7 +96,7 @@ export function jsonTree(value: unknown): HTMLElement {
 }
 
 function treeNode(key: string | null, value: unknown, openDepth: number): HTMLElement {
-  const isObject = value !== null && typeof value === 'object'
+  const isObject = value !== null && typeof value === 'object' && !(value instanceof JsonNumber)
   const size = isObject ? (Array.isArray(value) ? value.length : Object.keys(value as object).length) : 0
   if (!isObject || size === 0) {
     return h('div', { className: 'hv-node hv-leaf' }, keyLabel(key), isObject ? h('span', { className: 'hv-preview' }, Array.isArray(value) ? '[]' : '{}') : primitive(value))
@@ -190,14 +191,14 @@ function primitive(value: unknown): HTMLElement {
     }
     return el
   }
-  if (typeof value === 'number') return h('span', { className: 'hv-v-number' }, String(value))
+  if (typeof value === 'number' || value instanceof JsonNumber) return h('span', { className: 'hv-v-number' }, String(value))
   return h('span', { className: 'hv-v-literal' }, String(value))
 }
 
 /** `{id: 42, name: "Demo", …}` or `Array(12)`. */
 export function preview(value: unknown): string {
   if (Array.isArray(value)) return `Array(${value.length})`
-  if (value === null || typeof value !== 'object') return shortValue(value)
+  if (value === null || typeof value !== 'object' || value instanceof JsonNumber) return shortValue(value)
   let out = ''
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     const part = `${key}: ${shortValue(item)}`
@@ -213,7 +214,7 @@ export function preview(value: unknown): string {
 function shortValue(value: unknown): string {
   if (typeof value === 'string') return JSON.stringify(value.length > 24 ? `${value.slice(0, 24)}…` : value)
   if (Array.isArray(value)) return `Array(${value.length})`
-  if (value !== null && typeof value === 'object') return '{…}'
+  if (value !== null && typeof value === 'object' && !(value instanceof JsonNumber)) return '{…}'
   return String(value)
 }
 
@@ -274,12 +275,22 @@ function fontView(bytes: Uint8Array, ctx: Ctx, track: Track): HTMLElement {
 
 // ── Body ─────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The text the Source view shows: one-line JSON indented token by token, so every value (64-bit
+ * integers too) stays as written; as it is when it nests too deep to indent or is not JSON.
+ */
+export function sourceText(text: string, json: boolean): string {
+  if (!json || text.includes('\n') || text.length <= 80) return text
+  return reindentJson(text) ?? text
+}
+
 /** A request or response body with its view modes and a line about its size and origin. */
 export function bodyView(body: Body, ctx: Ctx, prefs: ViewPrefs, track: Track): HTMLElement {
   const s = ctx.strings
   if (body.kind === 'none') {
     if (body.reason === 'external-file') return note(fill(s.externalFile, { file: body.file ?? '' }))
     if (body.reason === 'missing-file') return note(fill(s.missingFile, { file: body.file ?? '' }))
+    if (body.reason === 'over-budget') return note(fill(s.overBudgetFile, { file: body.file ?? '' }))
     return note(body.reason === 'empty' ? s.emptyBody : s.notRecorded)
   }
   let kind: ViewKind
@@ -295,12 +306,9 @@ export function bodyView(body: Body, ctx: Ctx, prefs: ViewPrefs, track: Track): 
     } else if (kind === 'image') modes = ['preview', 'source']
     else modes = ['source']
   } else {
+    // Bytes that pass the text rule arrive as text, so these are media or binary.
     kind = viewKind(body.mimeType)
-    if (kind === 'image' || kind === 'audio' || kind === 'video' || kind === 'font') modes = ['preview', 'hex']
-    else if (looksLikeText(body.bytes)) {
-      text = decodeText(body.bytes, charsetOf(body.mimeType))
-      modes = ['source', 'hex']
-    } else modes = ['hex']
+    modes = kind === 'image' || kind === 'audio' || kind === 'video' || kind === 'font' ? ['preview', 'hex'] : ['hex']
   }
   const saved = prefs.modes[kind]
   let mode: BodyMode = saved && modes.includes(saved) ? saved : modes[0]
@@ -314,9 +322,10 @@ export function bodyView(body: Body, ctx: Ctx, prefs: ViewPrefs, track: Track): 
     const b = h('button', { type: 'button', 'aria-pressed': String(m === mode) }, labels[m])
     b.addEventListener('click', () => {
       mode = m
-      prefs.modes[kind] = m
       for (const other of segButtons) other.setAttribute('aria-pressed', String(other === b))
       render()
+      // Remembered once it has shown, so a view that failed is not the default for the next body.
+      prefs.modes[kind] = m
     })
     return b
   })
@@ -338,11 +347,19 @@ export function bodyView(body: Body, ctx: Ctx, prefs: ViewPrefs, track: Track): 
   const render = () => {
     wrapLabel.hidden = mode !== 'source'
     let view: HTMLElement
+    try {
+      view = build()
+    } catch {
+      // Whatever the body, its text can be shown.
+      view = sourceView(text ?? '', 'text', ctx, prefs.wrap)
+    }
+    content.replaceChildren(view)
+  }
+  const build = (): HTMLElement => {
+    let view: HTMLElement
     if (mode === 'tree') view = jsonTree(json)
     else if (mode === 'source') {
-      let shown = text ?? ''
-      // One-line JSON reads better indented.
-      if (kind === 'json' && json !== undefined && !shown.includes('\n') && shown.length > 80) shown = JSON.stringify(json, null, 2)
+      const shown = sourceText(text ?? '', kind === 'json' && json !== undefined)
       view = sourceView(shown, kind === 'image' ? 'xml' : languageOf(kind), ctx, prefs.wrap)
     } else if (mode === 'preview') {
       const mime = body.mimeType.split(';')[0].trim() || 'application/octet-stream'
@@ -353,7 +370,7 @@ export function bodyView(body: Body, ctx: Ctx, prefs: ViewPrefs, track: Track): 
     } else {
       view = hexView(body.kind === 'bytes' ? body.bytes : new TextEncoder().encode(text ?? ''), ctx)
     }
-    content.replaceChildren(view)
+    return view
   }
   render()
   root.append(bar, content)

@@ -31,9 +31,15 @@ export function overview(ctx: Ctx, input: OverviewInput, events: OverviewEvents)
   const root = h('div', { className: 'hv-overview' })
 
   const titled = model.pages.length === 1 ? model.pages[0].title : s.overview
-  const recorded = [model.creator ? fill(s.recordedBy, { creator: model.creator }) : '', model.start ? fill(s.recordedOn, { date: dateTime(model.start) }) : '']
-    .filter(Boolean)
-    .join(' ')
+  const date = model.start ? dateTime(model.start) : ''
+  const recorded =
+    model.creator && date
+      ? fill(s.recorded, { creator: model.creator, date })
+      : model.creator
+        ? fill(s.recordedBy, { creator: model.creator })
+        : date
+          ? fill(s.recordedOn, { date })
+          : ''
   root.append(
     h('div', { className: 'hv-ov-head' }, h('h2', { title: titled }, titled), recorded ? h('span', { className: 'hv-muted' }, recorded) : null),
     h('div', { className: 'hv-muted' }, s.overviewHint)
@@ -46,7 +52,7 @@ export function overview(ctx: Ctx, input: OverviewInput, events: OverviewEvents)
   card(ctx.bytes(summary.resources), s.columns.size)
   card(ctx.ms(summary.finish), s.finishLabel)
   if (summary.page && summary.page.onContentLoad >= 0) card(ctx.ms(summary.page.onContentLoad), 'DOMContentLoaded')
-  if (summary.page && summary.page.onLoad >= 0) card(ctx.ms(summary.page.onLoad), 'Load')
+  if (summary.page && summary.page.onLoad >= 0) card(ctx.ms(summary.page.onLoad), s.loadLabel)
   card(ctx.count(summary.errors), s.col.errors, summary.errors ? 'hv-err' : '')
   root.append(cards)
 
@@ -106,7 +112,7 @@ export function overview(ctx: Ctx, input: OverviewInput, events: OverviewEvents)
   if (model.pages.length > 1) {
     const counts = new Map<string, number>()
     for (const entry of model.entries) counts.set(entry.pageId, (counts.get(entry.pageId) ?? 0) + 1)
-    const table = h('table', { className: 'hv-table' }, h('tr', {}, h('th', {}, s.page), h('th', { className: 'hv-num' }, s.col.requests), h('th', { className: 'hv-num' }, 'DOMContentLoaded'), h('th', { className: 'hv-num' }, 'Load')))
+    const table = h('table', { className: 'hv-table' }, h('tr', {}, h('th', {}, s.page), h('th', { className: 'hv-num' }, s.col.requests), h('th', { className: 'hv-num' }, 'DOMContentLoaded'), h('th', { className: 'hv-num' }, s.loadLabel)))
     for (const page of model.pages) {
       table.append(
         h(

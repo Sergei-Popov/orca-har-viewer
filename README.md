@@ -6,8 +6,8 @@ HTTP Archive files in [Orca](https://orca.dev)'s editor tabs, opened from the fi
 link in an agent chat, or `orca file open`. You get a network log like a browser's developer
 tools: a fast request list with a waterfall, filters, and every request's headers, payload,
 response, cookies, timing, WebSocket messages and initiator. Copy a request as cURL or `fetch`,
-hand a short Markdown digest of the failed requests to a coding agent, or save a copy with the
-secrets masked.
+hand a short Markdown digest of the failed requests to a coding agent, or save a copy with known
+secret patterns masked.
 
 | Files      | What opens                                                                        |
 | ---------- | --------------------------------------------------------------------------------- |
@@ -32,7 +32,7 @@ timings left out or recorded as `-1`, requests without pages, and pages the file
 - Keys: <kbd>↑</kbd> <kbd>↓</kbd> <kbd>PgUp</kbd> <kbd>PgDn</kbd> <kbd>Home</kbd>
   <kbd>End</kbd> move through the list, <kbd>⌘F</kbd> / <kbd>Ctrl+F</kbd> goes to the filter,
   <kbd>Esc</kbd> closes the details. <kbd>Shift</kbd>-click selects a range and
-  <kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click adds a request, for the export.
+  <kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click adds a request, for the export (its popover says so too).
 - Drag the bar between the list and the details to resize them (or focus it and use the arrow
   keys).
 
@@ -78,37 +78,55 @@ largest request, and the number of domains.
 - **Export for agent** builds a compact Markdown digest of the selected requests, the failed
   ones, or the ones in the list (at most 100): method, URL, status, timing, sizes, the
   initiator, the request headers worth reading, and bodies cut to 2,000 characters (JSON
-  indented). Secrets are always masked in it. Copy it, or save it as a `.md` file.
+  indented). Known secret patterns are always masked in it. Copy it, or save it as a `.md` file.
 
 ## Secrets
 
-**Mask secrets** replaces secret values with `[masked]` in the view, in copied cURL and fetch
-commands, and in exports, and a banner says how many values in how many requests were masked.
-**Save sanitized…** writes a masked copy of the file (`.har`, or `.har.zip` for a `.har.zip`).
-What counts as a secret:
+**Mask secrets** replaces values that match known secret patterns with `[masked]` in the view,
+in copied cURL and fetch commands, and in exports, and a banner says how many values in how many
+requests were masked. **Save sanitized…** writes a masked copy of the file (`.har`, or
+`.har.zip` for a `.har.zip`). What counts as a secret:
 
 - `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie` values (cookie names,
   the auth scheme and cookie attributes stay), and headers named like `X-Api-Key` or
   `X-Auth-Token`;
-- query parameters, form fields, JSON keys and HTML `meta`/`input` values named like `token`,
-  `password`, `secret`, `api_key`, `session`, `csrf`, `signature` and similar; OAuth `code`
-  parameters on sign-in and callback URLs; passwords in URLs;
-- tokens recognisable by their shape anywhere in text: JWTs, private keys and well-known API
-  key formats.
+- query parameters (in the URL and in the HAR's query string list), form fields (urlencoded,
+  multipart and plain-text forms), JSON keys and HTML `meta`/`input` values named like `token`,
+  `password`, `secret`, `api_key`, `session`, `csrf`, `signature`, `passcode` and similar,
+  SAML messages and PKCE code verifiers;
+- OAuth `code` wherever the request shows an OAuth flow: a sign-in or callback path, or
+  `state`, `grant_type` or `redirect_uri` beside it, in URLs, forms and `form_post` pages;
+- URLs nested in parameter values (`?next=/reset?token=…`, `redirect_uri=https%3A…`), and
+  passwords in URLs;
+- tokens recognisable by their shape anywhere in text, JSON keys included: JWTs, private keys
+  and well-known API key formats (OpenAI, Anthropic, GitHub, GitLab, Slack, AWS, Google, Stripe
+  and others).
 
-Masking works on patterns, so read a sanitized file before sharing it. Binary bodies (images,
-fonts, media, protobuf) and binary WebSocket frames are copied unchanged, and a sanitized
-`.har.zip` keeps only the body files its requests point to.
+Bodies are taken apart before they are searched: JSON is masked in place, so only the masked
+values change and 64-bit integers, key order and spacing stay as they were; NDJSON, SignalR and
+Socket.IO frames, and multipart parts are masked as what they hold. Any body the viewer shows as
+text is masked as text, whatever its declared type, and written back the way it came (base64
+stays base64, a charset stays that charset). Page titles, comments and tools' own fields are
+masked as text too.
+
+Masking works on known patterns, so review a sanitized file before sharing it: a secret with no
+pattern it knows stays. Binary bodies (images, fonts, media, protobuf and other bytes that are
+not text) and binary WebSocket frames that are not text are copied unchanged. A sanitized
+`.har.zip` keeps only the body files its requests point to, and leaves out body files that were
+not unpacked (see the budget below), since they could not be masked.
 
 ## Limits
 
 - **Size.** Orca gives a plugin editor files of up to about 50 MiB (52,428,800 bytes). A larger
   file never reaches the viewer: Orca shows its own notice in the tab instead. A 48 MiB HAR with 9,000 requests opens in a second or
   two; masking or searching bodies in a file that size takes a moment longer. A `.har.zip` can
-  hold a HAR that unpacks to up to 256 MB.
+  hold a HAR that unpacks to up to 256 MB; its body files unpack to 256 MB each and 512 MB
+  together, and a body past that says so instead of showing.
+- **Search** looks at the first 2 MB of each body and of each request's WebSocket messages.
+  The Messages tab lists 500 frames at a time.
 - **Damaged files.** A file cut off or broken in the middle opens with the requests that could
-  be read and a notice with the line and column where it breaks and how many requests were
-  left out. A file that is not a HAR gets a message saying why.
+  be read and a notice that says whether it is cut off or where it breaks (line and column),
+  and how many requests were left out. A file that is not a HAR gets a message saying why.
 - **Bodies in separate files.** Playwright can save bodies as files next to a `.har`. Orca
   gives editors only the file they open, so those bodies show as unavailable; record to a
   `.har.zip` (or open the `.har.zip`) to see them.
@@ -153,12 +171,15 @@ orca plugin shot local.har-viewer --editor .samples/demo.har   # PNG of the edit
   holds the strings back until Orca has said which language it uses.
 - `src/ui/` — the view: `app.ts` (toolbar, filters, selection, masking, saving), `list.ts`
   (virtualized list and waterfall), `details.ts` (tabs), `viewers.ts` (JSON tree, source, hex,
-  media), `overview.ts`, `export.ts`, `common.ts`; `src/styles.ts`, `src/icons.ts`,
+  media), `overview.ts`, `export.ts`, `choices.ts` (menu choices), `common.ts`; `src/styles.ts`, `src/icons.ts`,
   `src/i18n.ts`, `src/dom.ts`, `src/format.ts`, `src/highlight.ts`.
 - `src/har/` — DOM-free and tested: `read.ts` (tolerant reading of cut-off and damaged JSON),
   `model.ts` and `classify.ts`, `body.ts`, `zip.ts` (`.har.zip`), `query.ts` (filters and
   sorting), `summary.ts`, `headers.ts`, `copy.ts` (cURL, fetch), `digest.ts` (the Markdown
-  digest), `sanitize.ts` and `masked.ts` (masking).
+  digest), `frames.ts` (WebSocket frames), `json-text.ts` (JSON as text: lossless indenting),
+  and masking: `sanitize.ts` (entries and the HAR), `mask-body.ts` (JSON in place, forms,
+  multipart, frames, byte bodies), `mask-url.ts` (URLs, parameters, free-text fields),
+  `mask-text.ts` (names, token shapes, free text) and `masked.ts` (with `.har.zip` files).
 - `src/fixtures/demo.ts` — the synthetic demo recording the tests, samples and screenshots use.
 - `tools/` — `make-samples.ts` and `rasterize-icons.sh` (icons from `icons/har.svg` and
   `images/icon.svg`).

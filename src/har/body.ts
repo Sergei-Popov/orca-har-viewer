@@ -4,10 +4,15 @@
 import type { HarContent, HarEntry, HarPostData } from './types'
 
 /** Body files of a .har.zip, by name. */
-export type SideFiles = { has(name: string): boolean; get(name: string): Uint8Array | null }
+export type SideFiles = {
+  has(name: string): boolean
+  get(name: string): Uint8Array | null
+  /** Whether `get` gave null because the archive's bodies together unpack to too much. */
+  overBudget?(name: string): boolean
+}
 
 export type Body =
-  | { kind: 'none'; reason: 'empty' | 'not-recorded' | 'missing-file' | 'external-file'; file?: string }
+  | { kind: 'none'; reason: 'empty' | 'not-recorded' | 'missing-file' | 'external-file' | 'over-budget'; file?: string }
   | { kind: 'text'; text: string; mimeType: string; size: number; base64: boolean; file?: string }
   | { kind: 'bytes'; bytes: Uint8Array; mimeType: string; size: number; file?: string }
 
@@ -45,7 +50,7 @@ function readBody(
   if (typeof file === 'string' && file) {
     if (!files) return { kind: 'none', reason: 'external-file', file }
     const bytes = files.get(file)
-    if (!bytes) return { kind: 'none', reason: 'missing-file', file }
+    if (!bytes) return { kind: 'none', reason: files.overBudget?.(file) ? 'over-budget' : 'missing-file', file }
     return fromBytes(bytes, mimeType, false, file)
   }
   if (typeof text !== 'string') return { kind: 'none', reason: declared === 0 ? 'empty' : 'not-recorded' }
@@ -60,7 +65,7 @@ function readBody(
 
 function fromBytes(bytes: Uint8Array, mimeType: string, base64: boolean, file?: string): Body {
   if (bytes.length === 0) return { kind: 'none', reason: 'empty', file }
-  if (isTextual(mimeType) || (!mimeType && looksLikeText(bytes))) {
+  if (isTextBody(bytes, mimeType)) {
     return { kind: 'text', text: decodeText(bytes, charsetOf(mimeType)), mimeType, size: bytes.length, base64, file }
   }
   return { kind: 'bytes', bytes, mimeType, size: bytes.length, file }
@@ -69,6 +74,24 @@ function fromBytes(bytes: Uint8Array, mimeType: string, base64: boolean, file?: 
 /** Text of a body, for search and export; null for bytes and missing bodies. */
 export function bodyText(body: Body): string | null {
   return body.kind === 'text' ? body.text : null
+}
+
+/**
+ * The one rule for "is this body text", shared by the viewer and the sanitizer: a text type, or
+ * any type but images, audio, video and fonts when the bytes are UTF-8 without control
+ * characters. Whatever the viewer shows as text is masked as text.
+ */
+export function isTextBody(bytes: Uint8Array, mimeType: string): boolean {
+  if (isTextual(mimeType)) return true
+  if (isMediaType(mimeType)) return false
+  return looksLikeText(bytes)
+}
+
+/** Images, audio, video and fonts: never shown or masked as text (SVG is XML, so it is text). */
+export function isMediaType(mimeType: string): boolean {
+  const mime = baseMime(mimeType)
+  if (mime === 'image/svg+xml') return false
+  return /^(?:image|audio|video|font)\//.test(mime) || mime.includes('font') || mime === 'application/ogg'
 }
 
 export function isTextual(mimeType: string): boolean {
@@ -154,31 +177,21 @@ export function utf8Length(text: string): number {
   return length
 }
 
-/** UTF-8 without control characters other than tab and line breaks, judged on the first 4 KB. */
+/**
+ * Valid UTF-8 without control characters other than tab, form feed and line breaks (the SignalR
+ * record separator U+001E counts as text too), judged on all of the bytes.
+ */
 export function looksLikeText(bytes: Uint8Array): boolean {
-  const sample = bytes.subarray(0, 4096)
-  for (const byte of sample) {
-    if (byte === 0) return false
-    if (byte < 0x20 && byte !== 9 && byte !== 10 && byte !== 13 && byte !== 12) return false
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i]
+    if (byte < 0x20 && byte !== 9 && byte !== 10 && byte !== 13 && byte !== 12 && byte !== 0x1e) return false
   }
   try {
-    new TextDecoder('utf-8', { fatal: true }).decode(sample.length < bytes.length ? trimPartial(sample) : sample)
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes)
     return true
   } catch {
     return false
   }
-}
-
-/** Drops a UTF-8 sequence cut by the sample's end. */
-function trimPartial(bytes: Uint8Array): Uint8Array {
-  let end = bytes.length
-  for (let i = 1; i <= 3 && end - i >= 0; i++) {
-    const byte = bytes[end - i]
-    if ((byte & 0xc0) === 0x80) continue
-    if (byte >= 0xc0) end -= i
-    break
-  }
-  return bytes.subarray(0, end)
 }
 
 /** How to show a body of this MIME type (and text, to spot JSON sent as text/plain). */
@@ -204,10 +217,29 @@ export function viewKind(mimeType: string, text?: string): ViewKind {
   return 'binary'
 }
 
-/** JSON.parse that returns undefined instead of throwing. */
+/** A number whose literal a double would change (a 64-bit ID, a long decimal): kept as written. */
+export class JsonNumber {
+  constructor(readonly source: string) {}
+  toString(): string {
+    return this.source
+  }
+}
+
+type Reviver = (this: unknown, key: string, value: unknown, context?: { source?: string }) => unknown
+
+/** Numbers a double cannot hold exactly come back as `JsonNumber`, where the engine tells their text. */
+const keepLongNumbers: Reviver = (key, value, context) =>
+  typeof value === 'number' && context?.source !== undefined && context.source.length > 15 && String(value) !== context.source
+    ? new JsonNumber(context.source)
+    : value
+
+/**
+ * JSON.parse that returns undefined instead of throwing. Numbers with 16 or more digits that a
+ * double would round come back as `JsonNumber`, so the viewer shows them as they are written.
+ */
 export function parseJson(text: string): unknown {
   try {
-    return JSON.parse(text)
+    return /\d{16}/.test(text) ? JSON.parse(text, keepLongNumbers as Parameters<typeof JSON.parse>[1]) : JSON.parse(text)
   } catch {
     return undefined
   }
