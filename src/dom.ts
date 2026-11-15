@@ -1,6 +1,7 @@
 // A tiny element builder: text goes in as text nodes, never as HTML, because everything shown
 // comes from the HAR. Only the static icon strings in icons.ts are inserted as markup.
 
+import { wrapPieces } from './format'
 import { MASK } from './har/sanitize'
 
 type Child = Node | string | null | undefined | false
@@ -44,6 +45,18 @@ export function maskedText(text: string): Node {
   parts.forEach((part, i) => {
     if (part) fragment.append(part)
     if (i < parts.length - 1) fragment.append(h('span', { className: 'hv-maskmark' }, MASK))
+  })
+  return fragment
+}
+
+/** A host name or URL that wraps only where {@link wrapPieces} allows, through `<wbr>`. */
+export function wrappable(text: string): Node {
+  const pieces = wrapPieces(text)
+  if (pieces.length < 2) return document.createTextNode(text)
+  const fragment = document.createDocumentFragment()
+  pieces.forEach((piece, i) => {
+    if (i) fragment.append(document.createElement('wbr'))
+    fragment.append(piece)
   })
   return fragment
 }

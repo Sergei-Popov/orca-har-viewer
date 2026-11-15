@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { clockTime, count, dateTime, formatBytes, formatMs, tickStep } from './format'
+import { clockTime, count, dateTime, formatBytes, formatMs, tickStep, wrapPieces } from './format'
 import { splitLines, tokenize } from './highlight'
 import { parseCookieHeader, parseServerTiming, parseSetCookie, requestCookies, responseCookies } from './har/headers'
 import { fill, stringsFor } from './i18n'
@@ -9,6 +9,24 @@ import { maskRecording } from './har/masked'
 import { buildModel } from './har/model'
 import { pageChoices } from './ui/choices'
 import { hexDump, preview, sourceText } from './ui/viewers'
+
+test('host names and URLs wrap at dots and slashes, never inside a label', () => {
+  assert.deepEqual(wrapPieces('api.example.com'), ['api.', 'example.', 'com'])
+  assert.deepEqual(wrapPieces('status.example.org'), ['status.', 'example.', 'org'])
+  assert.deepEqual(wrapPieces('https://app.example.com/dashboard?tab=1&x=2'), ['https://', 'app.', 'example.', 'com/', 'dashboard?', 'tab=', '1&', 'x=', '2'])
+  assert.deepEqual(wrapPieces('localhost'), ['localhost'])
+  assert.deepEqual(wrapPieces(''), [])
+  // A long label with no punctuation is cut so it cannot widen the table, and nothing is lost.
+  const token = 'd3c3cq33003psk7f1x.example.net'
+  assert.deepEqual(wrapPieces(token), ['d3c3cq33003p', 'sk7f1x.', 'example.', 'net'])
+  for (const text of [token, 'a'.repeat(40), 'Report 🧾 for 2026', 'https://x.test/𝒜𝒜𝒜𝒜𝒜𝒜𝒜𝒜𝒜𝒜𝒜𝒜𝒜𝒜']) {
+    const pieces = wrapPieces(text)
+    assert.equal(pieces.join(''), text)
+    for (const piece of pieces) assert.ok(Array.from(piece).length <= 12, piece)
+    // No piece starts with half of a surrogate pair.
+    for (const piece of pieces) assert.ok(!/^[\uDC00-\uDFFF]/.test(piece), piece)
+  }
+})
 
 test('sizes and durations', () => {
   assert.equal(formatBytes(0), '0 B')

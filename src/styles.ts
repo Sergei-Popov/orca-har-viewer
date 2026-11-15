@@ -325,6 +325,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .hv-table td { padding: 3px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); vertical-align: top; }
 .hv-table td.hv-num, .hv-table th.hv-num { text-align: right; white-space: nowrap; }
 .hv-table td.hv-wrapcell { overflow-wrap: anywhere; font-family: var(--mono-font); font-size: 11.5px; }
+.hv-table td.hv-namecell { font-family: var(--mono-font); font-size: 11.5px; }
 .hv-table tr.hv-clickable { cursor: pointer; }
 .hv-table tr.hv-clickable:hover td { background: var(--hover); }
 .hv-table tr.hv-active td { background: var(--select-strong); }
@@ -355,6 +356,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .hv-card b { display: block; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .hv-card span { color: var(--muted-fg); font-size: 11px; }
 .hv-ov h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.hv-ov .hv-table th, .hv-ov .hv-table td { padding-left: 6px; padding-right: 6px; }
 .hv-bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 3px 8px; align-items: center; }
 .hv-bars .hv-fill { height: 8px; border-radius: 2px; background: color-mix(in srgb, var(--info) 55%, transparent); min-width: 2px; }
 .hv-bars .hv-fill.hv-err { background: color-mix(in srgb, var(--err) 60%, transparent); }

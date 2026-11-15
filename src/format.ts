@@ -73,3 +73,29 @@ export function tickStep(span: number, target = 8): number {
   for (const factor of [1, 2, 5, 10]) if (power * factor >= raw) return power * factor
   return power * 10
 }
+
+/**
+ * Where a host name or URL may wrap in a narrow column: after dots, slashes (not inside `://`)
+ * and query punctuation, so it reads `api.` / `example.com` rather than `api.ex` / `ample.com`.
+ * A run of more than `max` characters with no such point, a random token for example, is cut
+ * every `max` characters, so it cannot push a table wider than its pane. Joined, the pieces give
+ * the text back; characters outside the BMP are never split.
+ */
+export function wrapPieces(text: string, max = 12): string[] {
+  const chars = Array.from(text)
+  const pieces: string[] = []
+  let piece = ''
+  let run = 0
+  chars.forEach((ch, i) => {
+    piece += ch
+    run++
+    const after = '.?&#=;,'.includes(ch) || /\s/.test(ch) || (ch === '/' && chars[i + 1] !== '/')
+    if (after || run >= max) {
+      pieces.push(piece)
+      piece = ''
+      run = 0
+    }
+  })
+  if (piece) pieces.push(piece)
+  return pieces
+}
