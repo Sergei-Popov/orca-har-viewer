@@ -354,14 +354,15 @@ test('review 14: an entry that cannot be masked is masked whole and reported, ne
   const broken = entry({
     request: { method: 'POST', url: `https://api.example.com/v1/login?token=${SECRET}`, headers: [{ name: 'X-Api-Key', value: SECRET }], postData: { mimeType: 'text/plain', text: `pw ${SECRET}` } }
   })
-  // A field that throws when masking reads it, as a bug in a masker would.
+  // A field that throws when masking reads it, as a bug in a masker would. Its first read is the
+  // pass that collects identifiers (which skips what it cannot read); masking makes the second.
   let reads = 0
   const holder = broken.request!.postData as Record<string, unknown>
   const text = holder.text
   Object.defineProperty(holder, 'text', {
     enumerable: true,
     get() {
-      if (reads++ === 0) throw new Error('masker failed')
+      if (reads++ === 1) throw new Error('masker failed')
       return text
     }
   })
