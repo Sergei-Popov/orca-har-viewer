@@ -85,7 +85,7 @@ if (!api) {
       app.showError(strings.errorTitle, message, detail)
       return
     }
-    const recording: Recording = { har: result.har, issue: result.issue, files: opened.files, zip: opened.zip }
+    const recording: Recording = { har: result.har, issue: result.issue, files: opened.files, zip: opened.zip, compact: result.compact }
     try {
       app.open(recording)
       shown = true

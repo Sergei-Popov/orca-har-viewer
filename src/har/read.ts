@@ -17,12 +17,23 @@ export type ReadIssue = {
 }
 
 export type ReadResult =
-  | { ok: true; har: Har; issue?: ReadIssue }
+  /** `compact`: the file is minified (one line), so its sanitized copy is written that way too. */
+  | { ok: true; har: Har; issue?: ReadIssue; compact?: boolean }
   | { ok: false; reason: 'empty' | 'not-json' | 'not-har'; message: string; line?: number; column?: number }
 
 /** Reads HAR text. Never throws. */
 export function readHar(input: string): ReadResult {
   const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input
+  const result = readText(text)
+  return result.ok && isCompact(text) ? { ...result, compact: true } : result
+}
+
+/** Minified JSON: no line break in its first 4 KB (JSON strings cannot hold one). */
+export function isCompact(text: string): boolean {
+  return !text.slice(0, 4096).trim().includes('\n')
+}
+
+function readText(text: string): ReadResult {
   if (!text.trim()) return { ok: false, reason: 'empty', message: 'The file is empty.' }
   let value: unknown
   try {
@@ -99,6 +110,13 @@ function wanted(frame: Frame | undefined): frame is Frame {
 }
 
 /**
+ * Nesting the damaged-file walk and the error finder track. No HAR nests nearly this deep; a
+ * crafted file of nothing but brackets would otherwise cost a frame per bracket, gigabytes for a
+ * file Orca still opens.
+ */
+export const MAX_TRACKED_DEPTH = 512
+
+/**
  * Walks the text once, tracking strings and nesting, and parses each element of `log.entries`
  * and `log.pages` (and `log.creator`, `log.browser`, `log.version`) on its own as soon as it
  * closes. Whatever is cut or broken is skipped; the walk survives a broken element as long as
@@ -152,8 +170,19 @@ function recover(text: string, message: string): ReadResult {
     else if (frame.key === 'comment' && typeof value === 'string') log.comment = value
   }
 
+  // Levels past MAX_TRACKED_DEPTH: only counted, so their brackets still pair up.
+  let deep = 0
   while (i < n) {
     const c = text.charCodeAt(i)
+    if (deep > 0) {
+      if (c === QUOTE) i = stringEnd(text, i + 1)
+      else {
+        if (c === OPEN_OBJECT || c === OPEN_ARRAY) deep++
+        else if (c === CLOSE_OBJECT || c === CLOSE_ARRAY) deep--
+        i++
+      }
+      continue
+    }
     const top = stack[stack.length - 1] as Frame | undefined
     if (c === QUOTE) {
       const start = i
@@ -169,6 +198,11 @@ function recover(text: string, message: string): ReadResult {
     }
     if (c === OPEN_OBJECT || c === OPEN_ARRAY) {
       if (wanted(top) && top.valueStart < 0) top.valueStart = i
+      if (stack.length >= MAX_TRACKED_DEPTH) {
+        deep = 1
+        i++
+        continue
+      }
       const path = !top ? '' : top.array ? `${top.path}[]` : top.path ? `${top.path}.${top.key ?? ''}` : (top.key ?? '')
       if (path === 'log' && c === OPEN_OBJECT) sawLog = true
       stack.push({ array: c === OPEN_ARRAY, key: null, expectKey: c === OPEN_OBJECT, path, valueStart: -1 })
@@ -270,7 +304,7 @@ const enum Expect {
 
 /**
  * Where JSON text first breaks the grammar, in one linear pass: `eof` when the text ends before
- * the JSON does. Null when it is valid.
+ * the JSON does. Null when it is valid. Nesting deeper than MAX_TRACKED_DEPTH counts as a break.
  */
 export function jsonError(text: string): { offset: number; eof: boolean } | null {
   const n = text.length
@@ -312,6 +346,8 @@ export function jsonError(text: string): { offset: number; eof: boolean } | null
       expect = Expect.After
       i++
     } else if (c === OPEN_OBJECT || c === OPEN_ARRAY) {
+      // Deeper than any HAR: the file is reported as broken here.
+      if (objects.length >= MAX_TRACKED_DEPTH) return at(i)
       objects.push(c === OPEN_OBJECT)
       expect = c === OPEN_OBJECT ? Expect.KeyOrClose : Expect.ValueOrClose
       i++

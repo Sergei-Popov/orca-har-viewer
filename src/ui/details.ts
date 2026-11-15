@@ -6,7 +6,7 @@ import { clockTime } from '../format'
 import { parseJson, requestBody, responseBody } from '../har/body'
 import { frameText, type FrameText } from '../har/frames'
 import { formFields, queryFields } from '../har/fields'
-import { toCurl, toFetch } from '../har/copy'
+import { safeUrl, toCurl, toFetch } from '../har/copy'
 import { parseServerTiming, requestCookies, responseCookies } from '../har/headers'
 import type { Entry } from '../har/model'
 import type { HarCookie, HarNameValue, HarStack, HarWebSocketMessage } from '../har/types'
@@ -89,7 +89,7 @@ export class DetailsPane {
       title,
       iconButton('terminal', s.copyCurl, () => this.copy(toCurl(entry.raw, data.files)), 'cURL'),
       iconButton('code', s.copyFetch, () => this.copy(toFetch(entry.raw, data.files)), 'fetch'),
-      iconButton('link', s.copyUrl, () => this.copy(entry.url)),
+      iconButton('link', s.copyUrl, () => this.copy(safeUrl(entry.url) ? entry.url : null)),
       iconButton('close', s.close, () => this.events.close())
     )
     const tabBar = h('div', { className: 'hv-tabs', role: 'tablist' })
@@ -110,7 +110,9 @@ export class DetailsPane {
     if (scroll) content.scrollTop = scroll
   }
 
-  private copy(text: string): void {
+  /** Copies a command or URL; null means the file's request is not safe to paste into a terminal. */
+  private copy(text: string | null): void {
+    if (text === null) return this.ctx.toast(this.ctx.strings.copyUnsafe)
     void copyText(text).then((ok) => this.ctx.toast(ok ? this.ctx.strings.copied : this.ctx.strings.copyFailed))
   }
 
@@ -257,7 +259,7 @@ export class DetailsPane {
     const query = queryFields(raw, entry.url)
     if (query.length) root.append(section('payload-query', s.queryParams, kvList(query, 'hv-headers'), { count: query.length }))
     const post = raw.request?.postData
-    const form = formFields(raw) ?? []
+    const form = formFields(raw, data.files) ?? []
     if (form.length) root.append(section('payload-form', s.formData, kvList(form, 'hv-headers'), { count: form.length }))
     else if (post) root.append(section('payload-body', s.requestPayload, bodyView(requestBody(raw, data.files), this.ctx, this.prefs, this.track)))
     if (!root.childNodes.length) root.append(note(s.noPayload))

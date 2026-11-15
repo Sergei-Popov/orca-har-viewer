@@ -11,7 +11,15 @@ export const MASK = '[masked]'
 
 export type MaskKind = 'headers' | 'cookies' | 'query' | 'bodies' | 'other'
 
-export type Counter = { add(kind: MaskKind, count?: number): void }
+export type Counter = {
+  add(kind: MaskKind, count?: number): void
+  /**
+   * Values a body keeps because their JSON name says they identify something (`"id": "ord_8f2a…"`):
+   * the same string in a REST path or another value names the same object, so the catch-all
+   * leaves it there too. Names still decide: a secret-named value is masked whatever it is.
+   */
+  ids?: Set<string>
+}
 
 /** Masks without counting, for values that repeat ones counted elsewhere. */
 export const QUIET: Counter = { add: () => undefined }
@@ -238,6 +246,28 @@ export function setNestedMasker(masker: NestedMasker): void {
   nested = masker
 }
 
+/** JSON in a value (a query parameter, a form field), masked by key name; null when it is not JSON. */
+export type JsonMasker = (text: string, counter: Counter, kind: MaskKind, options: MaskOptions) => string | null
+
+let jsonMasker: JsonMasker | null = null
+
+/** Lets the body layer handle JSON nested in values, without an import cycle. */
+export function setJsonMasker(masker: JsonMasker): void {
+  jsonMasker = masker
+}
+
+/**
+ * A value that is a JSON object or array (`?variables={"password":…}`, a form field holding
+ * JSON) masked as JSON, so its keys count by name as they do in a body; null for anything else.
+ */
+export function maskJsonValue(value: string, counter: Counter, kind: MaskKind, options: MaskOptions): string | null {
+  const depth = options.depth ?? 0
+  if (!jsonMasker || depth >= MAX_DEPTH) return null
+  const first = value.trimStart()[0]
+  if (first !== '{' && first !== '[') return null
+  return jsonMasker(value, counter, kind, { ...options, depth: depth + 1 })
+}
+
 /** Masks token-shaped values, credentials in URLs and secret-named pairs in any text. */
 export function maskText(text: string, counter: Counter, kind: MaskKind = 'other', options: MaskOptions = {}): string {
   if (text.length < 6) return text
@@ -304,6 +334,8 @@ export function maskText(text: string, counter: Counter, kind: MaskKind = 'other
 export function maskValue(value: string, counter: Counter, kind: MaskKind, options: MaskOptions = {}): string {
   if (value.length < 6) return value
   const depth = options.depth ?? 0
+  const json = maskJsonValue(value, counter, kind, options)
+  if (json !== null) return json
   if (nested && depth < MAX_DEPTH && /[=?#%]/.test(value)) return nested(value, counter, kind, { ...options, depth: depth + 1 })
   // Nested deeper than masking takes apart: the whole value goes when anything in it is secret.
   if (depth === MAX_DEPTH && /[=?#%]/.test(value) && hasDeepSecret(value, kind, options)) {
@@ -369,12 +401,14 @@ export function maskRandom(text: string, counter: Counter, kind: MaskKind, optio
     const before = NAME_BEFORE.exec(text.slice(Math.max(0, offset - 48), offset))
     if (before && isIdName(before[1])) return run
     const body = run.replace(/=+$/, '')
+    const ids = counter.ids
+    if (ids?.has(run) || ids?.has(body)) return run
     if (body.includes('/') && body.length === run.length && !body.includes('+')) {
       let changed = false
       const pieces = body.split('/')
       const last = pieces.length - 1
       pieces.forEach((piece, index) => {
-        if ((fileName && index === last) || !isRandom(piece, options)) return
+        if ((fileName && index === last) || ids?.has(piece) || !isRandom(piece, options)) return
         changed = true
         counter.add(kind)
         pieces[index] = MASK
@@ -421,6 +455,29 @@ export function isRandom(run: string, options: RandomOptions = {}): boolean {
     entropy -= (p * Math.log(p)) / LOG2
   }
   return entropy >= (hex ? 3 : 3.5)
+}
+
+/** `"orderId": "ord_8f2a…"`: a JSON string of the catch-all's alphabet under a name. */
+const NAMED_JSON_STRING = /"([A-Za-z_$][\w$.-]{0,40})"\s*:\s*"([A-Za-z0-9+_-]{20,200})"/g
+
+/** Identifiers kept for one recording at most: the set is a convenience, not worth unbounded memory. */
+const MAX_IDS = 100_000
+
+/** Records a value kept under an identifier's name, when the catch-all would mask it elsewhere. */
+export function learnId(counter: Counter, value: string): void {
+  const ids = counter.ids
+  if (ids && ids.size < MAX_IDS && value.length >= 20 && value.length <= 200 && isRandom(value)) ids.add(value)
+}
+
+/** Every value under an identifier's name in JSON text (a body as the file holds it), into `ids`. */
+export function collectIds(text: string, ids: Set<string>): void {
+  if (ids.size >= MAX_IDS || text.length < 30 || !text.includes('"')) return
+  const counter: Counter = { add: () => undefined, ids }
+  NAMED_JSON_STRING.lastIndex = 0
+  for (let match = NAMED_JSON_STRING.exec(text); match; match = NAMED_JSON_STRING.exec(text)) {
+    if (isIdName(match[1])) learnId(counter, match[2])
+    if (ids.size >= MAX_IDS) return
+  }
 }
 
 /** `decodeURIComponent` with `+` as a space, or the text itself when it does not decode. */

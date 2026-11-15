@@ -36,7 +36,7 @@ test('Copy as cURL', () => {
   assert.equal(
     curl,
     [
-      `curl 'https://api.example.com/v1/items?q=it'\\''s'`,
+      `curl --url 'https://api.example.com/v1/items?q=it'\\''s'`,
       `-H 'content-type: application/json'`,
       `-b 'a=1'`,
       `-H 'referer: https://app.example.com/'`,
@@ -46,14 +46,14 @@ test('Copy as cURL', () => {
     ].join(' \\\n  ')
   )
   const put = toCurl({ request: { method: 'PUT', url: 'https://e.com/x', headers: [] } })
-  assert.equal(put, `curl 'https://e.com/x' \\\n  -X 'PUT'`)
-  assert.equal(toCurl({ request: { method: 'GET', url: 'https://e.com/' } }), `curl 'https://e.com/'`)
+  assert.equal(put, `curl --url 'https://e.com/x' \\\n  -X 'PUT'`)
+  assert.equal(toCurl({ request: { method: 'GET', url: 'https://e.com/' } }), `curl --url 'https://e.com/'`)
 })
 
 test('Copy as fetch', () => {
   const code = toFetch(post)
-  assert.ok(code.startsWith('fetch("https://api.example.com/v1/items?q=it\'s", {'))
-  const init = JSON.parse(code.slice(code.indexOf(', ') + 2, -2))
+  assert.ok(code?.startsWith('fetch("https://api.example.com/v1/items?q=it\'s", {'))
+  const init = JSON.parse(code!.slice(code!.indexOf(', ') + 2, -2))
   assert.deepEqual(init.headers, { 'content-type': 'application/json' })
   assert.equal(init.referrer, 'https://app.example.com/')
   assert.equal(init.body, '{"name":"it\'s"}')
@@ -65,7 +65,7 @@ test('cURL and fetch of a masked entry hold no secrets', () => {
   const masked = sanitizeHar(demoHar()).har
   for (const entry of masked.log.entries!) {
     for (const text of [toCurl(entry), toFetch(entry)]) {
-      for (const secret of Object.values(DEMO_SECRETS)) assert.ok(!text.includes(secret), `${entry.request?.url}: ${secret}`)
+      for (const secret of Object.values(DEMO_SECRETS)) assert.ok(text !== null && !text.includes(secret), `${entry.request?.url}: ${secret}`)
     }
   }
 })

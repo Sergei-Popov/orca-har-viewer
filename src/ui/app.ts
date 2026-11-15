@@ -6,7 +6,7 @@ import { h, svg } from '../dom'
 import { count, formatBytes, formatMs } from '../format'
 import type { SideFiles } from '../har/body'
 import { RESOURCE_TYPES, type ResourceType } from '../har/classify'
-import { maskedHarText, maskedHarZipSteps, maskingWeight, maskRecording, maskSteps, runSteps, runStepsAsync, type Masked } from '../har/masked'
+import { maskedHarBytes, maskedHarZipSteps, maskingWeight, maskRecording, maskSteps, runSteps, runStepsAsync, type Masked } from '../har/masked'
 import { buildModel } from '../har/model'
 import { emptyFilter, filterEntries, Haystacks, sortIndexes, type FilterState, type Scope, type Sort, type SortKey } from '../har/query'
 import type { ReadIssue } from '../har/read'
@@ -22,7 +22,8 @@ import { RequestList, waterfallScale } from './list'
 import { overview } from './overview'
 
 /** A HAR as opened: from a .har, or from a .har.zip with its body files. */
-export type Recording = { har: Har; issue?: ReadIssue; files?: SideFiles; zip: boolean }
+/** `compact`: the .har was minified, so its sanitized copy is too. */
+export type Recording = { har: Har; issue?: ReadIssue; files?: SideFiles; zip: boolean; compact?: boolean }
 
 type View = Dataset & { haystacks: Haystacks }
 
@@ -660,7 +661,7 @@ export class HarApp {
     if (!masked) return
     let copy: Copy | null
     try {
-      copy = this.copyOf(recording, masked, recording.zip ? runSteps(maskedHarZipSteps(masked.result)) : null)
+      copy = this.copyOf(recording, masked, recording.zip ? runSteps(maskedHarZipSteps(masked.result, recording.compact)) : null)
     } catch (error) {
       console.warn('[har-viewer] cannot build the sanitized copy', error)
       this.toast(this.s.saveFailed)
@@ -681,7 +682,7 @@ export class HarApp {
       let zip: Uint8Array | null = null
       if (recording.zip) {
         this.showProgress(this.s.buildingCopy, 0)
-        zip = await runStepsAsync(maskedHarZipSteps(masked.result), (done) => current() && this.showProgress(this.s.buildingCopy, done))
+        zip = await runStepsAsync(maskedHarZipSteps(masked.result, recording.compact), (done) => current() && this.showProgress(this.s.buildingCopy, done))
       }
       if (!current()) return
       this.prepared = this.copyOf(recording, masked, zip)
@@ -699,7 +700,7 @@ export class HarApp {
 
   /** The file to save; null (with a toast) when it is more than Orca saves. */
   private copyOf(recording: Recording, masked: MaskedView, zip: Uint8Array | null): Copy | null {
-    const data = zip ?? new TextEncoder().encode(maskedHarText(masked.result))
+    const data = zip ?? maskedHarBytes(masked.result, !!recording.compact, SAVE_LIMIT)
     if (data.length > SAVE_LIMIT) {
       this.toast(this.s.saveTooBig)
       return null

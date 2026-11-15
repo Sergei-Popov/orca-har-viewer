@@ -26,7 +26,8 @@ All notable changes to this plugin are documented here. The format follows
   WebSocket messages and Initiator with the call stack and related requests.
 - An overview with totals, requests by type and status, a per-domain table that filters the
   list, and the slowest, largest and failed requests; a summary strip under the list.
-- Copy as cURL and as fetch; "Export for agent", a Markdown digest of selected, failed or
+- Copy as cURL and as fetch (every value an option's argument; header names that are not tokens
+  left out; requests with control characters in the URL, method or headers not copied); "Export for agent", a Markdown digest of selected, failed or
   listed requests with bodies cut and known secret patterns masked, to copy or save.
 - "Mask secrets" with a banner counting what was masked, and "Save sanitized…" for a masked
   `.har` or `.har.zip`. Masking knows credential headers and cookies (folded and nameless

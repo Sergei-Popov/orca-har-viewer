@@ -13,11 +13,14 @@ import {
   hasOauthNames,
   isIdName,
   isSecretName,
+  learnId,
   maskRandom,
   maskText,
   maskTokens,
   maskValue,
+  nameWords,
   safeDecode,
+  setJsonMasker,
   type Counter,
   type MaskKind,
   type MaskOptions
@@ -386,8 +389,22 @@ type Frame = {
   ids: boolean
 }
 
-/** A key that names a field (`id`, `user`, `createdAt`, `line2`) rather than holding a value. */
+/** The shape of a key that names a field (`id`, `user`, `createdAt`, `line2`). */
 const FIELD_NAME = /^[A-Za-z_$@][A-Za-z_$@.-]{0,63}[0-9]{0,3}$/
+
+/**
+ * A key that names a field rather than holding a value, for the keys of a secret-named object:
+ * the field-name shape, no word of 16 letters or more, no long word without a vowel, and not
+ * mostly one- and two-letter pieces (`AbCdEfGh…`), so session IDs made only of letters
+ * (`kjhsdfkjhsdfkjhsdfkjhsdf`) are masked as the ones with digits are.
+ */
+export function isFieldName(key: string): boolean {
+  if (!FIELD_NAME.test(key)) return false
+  const words = nameWords(key)
+  if (words.some((word) => word.length >= 16 || (word.length >= 6 && !/[aeiouy]/.test(word)))) return false
+  const short = words.filter((word) => word.length <= 2).length
+  return words.length < 4 || short * 2 <= words.length
+}
 
 /**
  * Masks a JSON object or array without parsing it into values: whole values under secret-named
@@ -433,7 +450,7 @@ export function maskJsonText(
         top.key = value
         top.valueSecret = top.secret || isSecretName(value, inner)
         let key = maskTokens(value, counter, kind)
-        if (key === value && value && value !== MASK && top.secret && !FIELD_NAME.test(value)) {
+        if (key === value && value && value !== MASK && top.secret && !isFieldName(value)) {
           counter.add(kind)
           key = MASK
         } else if (random) key = maskRandom(key, counter, kind)
@@ -447,8 +464,10 @@ export function maskJsonText(
           replace(start, end, `"${MASK}"`)
         }
       } else {
-        const masked = maskJsonString(value, counter, kind, plainIds(top) ? { ...inner, noEntropy: true } : inner, encodable)
+        const ids = plainIds(top)
+        const masked = maskJsonString(value, counter, kind, ids ? { ...inner, noEntropy: true } : inner, encodable)
         if (masked !== value) replace(start, end, jsonStringLike(masked, literal, encodable))
+        else if (ids) learnId(counter, value)
       }
     } else if (type === 'scalar') {
       // Numbers under secret keys; true, false and null say nothing secret.
@@ -487,6 +506,8 @@ function maskFramedLike(value: string): boolean {
   const c = value.charCodeAt(0)
   return (c >= 0x30 && c <= 0x39 && /^\d{1,3}[^\s]{0,40}[[{]/.test(value)) || ((c === 0x61 || c === 0x63) && value.charCodeAt(1) === 0x5b)
 }
+
+setJsonMasker((text, counter, kind, options) => maskJsonText(text, counter, kind, options))
 
 // ── Forms ────────────────────────────────────────────────────────────────────────────────────
 
