@@ -19,15 +19,39 @@ export type Counter = {
    * leaves it there too. Names still decide: a secret-named value is masked whatever it is.
    */
   ids?: Set<string>
+  /**
+   * SignalR connection tokens a body names (`"connectionToken": "…"`, private to the client): a
+   * URL parameter holding one is masked whatever its name (`?id=<token>`).
+   */
+  tokens?: Set<string>
+  /**
+   * SignalR hubs, as `host/path` of a `…/negotiate` request: the `id` parameter of their transport
+   * URLs (`wss://host/path?id=…`, long polling) is the connection token.
+   */
+  hubs?: Set<string>
+}
+
+/** What a recording's bodies and URLs tell the masking of everything else, found before masking. */
+export type RecordingFacts = { ids: Set<string>; tokens: Set<string>; hubs: Set<string> }
+
+export function emptyFacts(): RecordingFacts {
+  return { ids: new Set(), tokens: new Set(), hubs: new Set() }
 }
 
 /** Masks without counting, for values that repeat ones counted elsewhere. */
 export const QUIET: Counter = { add: () => undefined }
 
+/** Counts nothing, for values that repeat ones counted elsewhere, and knows the same facts. */
+export function quietOf(counter: Counter): Counter {
+  return counter.ids || counter.tokens || counter.hubs ? { ids: counter.ids, tokens: counter.tokens, hubs: counter.hubs, add: () => undefined } : QUIET
+}
+
 /** What the surroundings say about a value. */
 export type MaskOptions = {
   /** An OAuth or OpenID flow: its one-time `code` counts as a secret too. */
   oauth?: boolean
+  /** A SignalR hub's transport request: its `id` parameter is the connection token. */
+  hub?: boolean
   /** How deep values nested in values (URLs in query values, JSON in strings) have gone. */
   depth?: number
   /** How deep multipart bodies nested in multipart parts have gone. */
@@ -62,6 +86,7 @@ const SENSITIVE_PARTS = [
   'csrf',
   'xsrf',
   'signature',
+  'hmac',
   'bearer',
   'jwt',
   'saml',
@@ -146,11 +171,19 @@ const ID_WORDS = new Set([
   'build'
 ])
 
+/**
+ * Words that make a name a credential's even when an identifier's word ends it: `X-Auth-Id`,
+ * `auth_req_id`, `mfa_id`, `pin_id`, `X-Shopify-Hmac-Sha256`. Credential words win.
+ */
+const CREDENTIAL_WORDS = new Set(['auth', 'authn', 'authz', 'hmac', 'mfa', 'pwd', 'pass', 'passwd', 'pin', 'ssn', 'sig', 'otp', 'totp', 'hotp', 'cvv', 'cvc'])
+
 /** `requestId`, `node_id`, `sha`, `etag`, `v`: the value identifies something and is no secret. */
 export function isIdName(name: string): boolean {
   if (!name || name.length > 64 || isSensitiveName(name)) return false
   const words = nameWords(name)
-  return words.length > 0 && ID_WORDS.has(words[words.length - 1])
+  if (!words.length || !ID_WORDS.has(words[words.length - 1])) return false
+  for (let i = 0; i < words.length - 1; i++) if (CREDENTIAL_WORDS.has(words[i])) return false
+  return true
 }
 
 /** Parameter names that only appear in OAuth and OpenID requests and responses. */
@@ -265,7 +298,24 @@ export function maskJsonValue(value: string, counter: Counter, kind: MaskKind, o
   if (!jsonMasker || depth >= MAX_DEPTH) return null
   const first = value.trimStart()[0]
   if (first !== '{' && first !== '[') return null
-  return jsonMasker(value, counter, kind, { ...options, depth: depth + 1 })
+  const inner = { ...options, depth: depth + 1 }
+  return jsonMasker(value, counter, kind, inner) ?? maskLooseJson(value, counter, kind, inner)
+}
+
+/** `{pin: 4821, password: hunter2}`: a key and an unquoted value in a loose object literal. */
+const LOOSE_PAIR = /([{,][ \t]*)(["']?)([A-Za-z_$][\w$.-]{0,63})\2([ \t]*:[ \t]*)([^\s"'`,{}[\]][^,{}[\]\r\n]{0,4095}?)(?=[ \t]*(?:[,}\]]|$))/g
+
+/**
+ * Text that starts like JSON but is not (cut off, single quotes, unquoted keys, a trailing comma):
+ * the text rules, which find `"key": "value"` and `'key': 'value'` by name, then unquoted values
+ * under secret names. Booleans and null stay, as they do in JSON.
+ */
+function maskLooseJson(text: string, counter: Counter, kind: MaskKind, options: MaskOptions): string {
+  return maskText(text, counter, kind, options).replace(LOOSE_PAIR, (match, lead: string, quote: string, key: string, sep: string, value: string) => {
+    if (value.startsWith(MASK) || /^(?:true|false|null)$/.test(value) || !isSecretName(key, options)) return match
+    counter.add(kind)
+    return `${lead}${quote}${key}${quote}${sep}${MASK}`
+  })
 }
 
 /** Masks token-shaped values, credentials in URLs and secret-named pairs in any text. */
@@ -457,27 +507,13 @@ export function isRandom(run: string, options: RandomOptions = {}): boolean {
   return entropy >= (hex ? 3 : 3.5)
 }
 
-/** `"orderId": "ord_8f2a…"`: a JSON string of the catch-all's alphabet under a name. */
-const NAMED_JSON_STRING = /"([A-Za-z_$][\w$.-]{0,40})"\s*:\s*"([A-Za-z0-9+_-]{20,200})"/g
-
 /** Identifiers kept for one recording at most: the set is a convenience, not worth unbounded memory. */
-const MAX_IDS = 100_000
+export const MAX_IDS = 100_000
 
 /** Records a value kept under an identifier's name, when the catch-all would mask it elsewhere. */
 export function learnId(counter: Counter, value: string): void {
   const ids = counter.ids
   if (ids && ids.size < MAX_IDS && value.length >= 20 && value.length <= 200 && isRandom(value)) ids.add(value)
-}
-
-/** Every value under an identifier's name in JSON text (a body as the file holds it), into `ids`. */
-export function collectIds(text: string, ids: Set<string>): void {
-  if (ids.size >= MAX_IDS || text.length < 30 || !text.includes('"')) return
-  const counter: Counter = { add: () => undefined, ids }
-  NAMED_JSON_STRING.lastIndex = 0
-  for (let match = NAMED_JSON_STRING.exec(text); match; match = NAMED_JSON_STRING.exec(text)) {
-    if (isIdName(match[1])) learnId(counter, match[2])
-    if (ids.size >= MAX_IDS) return
-  }
 }
 
 /** `decodeURIComponent` with `+` as a space, or the text itself when it does not decode. */

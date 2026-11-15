@@ -10,8 +10,11 @@ import { JsonTokens, isJsonContainer, jsonStringLike, stringEnd } from './json-t
 import {
   MASK,
   MAX_DEPTH,
+  MAX_IDS,
+  QUIET,
   hasOauthNames,
   isIdName,
+  isRandom,
   isSecretName,
   learnId,
   maskRandom,
@@ -23,7 +26,8 @@ import {
   setJsonMasker,
   type Counter,
   type MaskKind,
-  type MaskOptions
+  type MaskOptions,
+  type RecordingFacts
 } from './mask-text'
 import { maskFreeText } from './mask-url'
 
@@ -387,6 +391,63 @@ type Frame = {
   key: string
   /** The values of an array are identifiers by the key it is under (`"ids": […]`). */
   ids: boolean
+}
+
+/** A JSON string of the catch-all's alphabet under some name, or a connection token: worth a walk. */
+const FACT_HINT = /"[A-Za-z_$][\w$.-]{0,40}"\s*:\s*"[A-Za-z0-9+_-]{20,200}"|connectiontoken/i
+
+/**
+ * What a JSON body tells the masking of the rest of the recording, read before anything is
+ * masked: the values it keeps under identifier names, in the same frames `maskJsonText` masks
+ * with (never inside a secret-named object: `{"session":{"id":…}}` is a secret), and SignalR
+ * connection tokens. Text that is not a JSON object or array tells nothing.
+ */
+export function collectJsonFacts(text: string, facts: RecordingFacts): void {
+  const full = () => facts.ids.size >= MAX_IDS
+  if (text.length < 30 || !FACT_HINT.test(text) || (full() && !/connectiontoken/i.test(text)) || !isJsonContainer(text)) return
+  const tokens = new JsonTokens(text)
+  type Walk = { object: boolean; expectKey: boolean; secret: boolean; valueSecret: boolean; key: string; ids: boolean }
+  const stack: Walk[] = []
+  // Keys repeat in every element of an array: each name is judged once.
+  const idNames = new Map<string, boolean>()
+  const secretNames = new Map<string, boolean>()
+  const isId = (name: string) => {
+    let id = idNames.get(name)
+    if (id === undefined) idNames.set(name, (id = isIdName(name)))
+    return id
+  }
+  // Conservative: `code` and `ticket` count as secret names wherever they are.
+  const isSecret = (name: string) => {
+    let secret = secretNames.get(name)
+    if (secret === undefined) secretNames.set(name, (secret = isSecretName(name, { oauth: true })))
+    return secret
+  }
+  while (tokens.next()) {
+    const top = stack[stack.length - 1] as Walk | undefined
+    const { type, start, end } = tokens
+    if (type === '{' || type === '[') {
+      const secret = !!top && (top.object ? top.valueSecret : top.secret)
+      const ids = !!top && (top.object ? isId(top.key) : top.ids)
+      stack.push({ object: type === '{', expectKey: type === '{', secret, valueSecret: false, key: '', ids })
+    } else if (type === '}' || type === ']') {
+      stack.pop()
+    } else if (type === ',') {
+      if (top?.object) top.expectKey = true
+    } else if (type === 'string' && top) {
+      const literal = text.slice(start, end)
+      const value = literal.includes('\\') ? (JSON.parse(literal) as string) : literal.slice(1, -1)
+      if (top.object && top.expectKey) {
+        top.expectKey = false
+        top.key = value
+        top.valueSecret = top.secret || isSecret(value)
+      } else if (top.object && top.key.length === 15 && top.key.toLowerCase() === 'connectiontoken') {
+        if (value.length >= 8) facts.tokens.add(value)
+      } else if (value.length >= 20 && value.length <= 200 && !full() && !(top.object ? top.valueSecret : top.secret) && (top.object ? isId(top.key) : top.ids)) {
+        // As `maskJsonText` keeps it: random-looking, and no token shape in it is masked.
+        if (!facts.ids.has(value) && isRandom(value) && maskTokens(value, QUIET, 'bodies') === value) facts.ids.add(value)
+      }
+    }
+  }
 }
 
 /** The shape of a key that names a field (`id`, `user`, `createdAt`, `line2`). */

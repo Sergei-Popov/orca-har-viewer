@@ -4,10 +4,11 @@
 // and packed in slices that let the page paint, or all at once.
 
 import { Zip, ZipDeflate, ZipPassThrough } from '../../vendor/fflate/fflate.mjs'
-import { isMediaType, type SideFiles } from './body'
+import { charsetOf, decodeText, isMediaType, isTextBody, type SideFiles } from './body'
+import { collectJsonFacts } from './mask-body'
 import { MASK } from './mask-text'
 import { isOauthUrl } from './mask-url'
-import { emptyReport, recordingIds, sanitizeSideFile, sanitizeSteps, type Counter, type SanitizeReport } from './sanitize'
+import { emptyReport, recordingFacts, sanitizeSideFile, sanitizeSteps, type Counter, type SanitizeReport } from './sanitize'
 import type { Har, HarEntry } from './types'
 
 export type Masked = { har: Har; report: SanitizeReport; files?: SideFiles }
@@ -53,6 +54,18 @@ function fileRefs(entry: HarEntry): { name: string; mimeType: string }[] {
 
 const MASKED_FILE = new TextEncoder().encode(MASK)
 
+/** A body file worth reading for facts: a JSON type, or text that starts like an object or array. */
+function looksLikeJson(bytes: Uint8Array, mimeType: string): boolean {
+  if (/json/i.test(mimeType)) return true
+  for (let i = 0; i < bytes.length && i < 64; i++) {
+    const b = bytes[i]
+    if (b === 0x7b || b === 0x5b) return isTextBody(bytes, mimeType)
+    // Space, tab, line breaks and a UTF-8 byte order mark.
+    if (b !== 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d && b !== 0xef && b !== 0xbb && b !== 0xbf) return false
+  }
+  return false
+}
+
 /** Bytes of the text body files a recording's entries point to, as the archive declares them. */
 function textFileBytes(har: Har, files?: SideFiles): number {
   let bytes = 0
@@ -95,18 +108,38 @@ export function maskRecording(har: Har, files?: SideFiles): Masked {
 }
 
 /**
- * `maskRecording` in steps: the body files first, then the entries, so identifiers the files'
- * JSON keeps under their names (`"id": "ord_8f2a…"`) are known when the URLs are masked.
+ * `maskRecording` in steps. First what the recording says about its values (`recordingFacts`),
+ * from the inline bodies and the JSON body files alike, so identifiers any body keeps under their
+ * names (`"id": "ord_8f2a…"`) are known wherever the same value turns up, whatever the order of
+ * files; then the body files; then the entries.
  */
 export function* maskSteps(har: Har, files?: SideFiles): Steps<Masked> {
   const fileBytes = textFileBytes(har, files)
-  // Body files and entries share the progress by what there is of each.
+  // Body files and entries share the progress by what there is of each; reading the JSON files
+  // for facts takes the first part of the files' share.
   const fileShare = files && fileBytes ? 0.7 : 0
+  const factShare = fileShare * 0.2
   const report = emptyReport()
-  const ids = recordingIds(har)
+  const facts = recordingFacts(har)
   const replaced = new Map<string, Uint8Array>()
   if (files) {
     const entries = Array.isArray(har.log.entries) ? har.log.entries : []
+    let read = 0
+    const seen = new Set<string>()
+    for (const entry of entries) {
+      for (const ref of fileRefs(entry)) {
+        if (seen.has(ref.name) || isMediaType(ref.mimeType) || !files.has(ref.name)) continue
+        seen.add(ref.name)
+        try {
+          const bytes = files.get(ref.name)
+          if (bytes && looksLikeJson(bytes, ref.mimeType)) collectJsonFacts(decodeText(bytes, charsetOf(ref.mimeType)), facts)
+        } catch {
+          // A file this pass cannot read is replaced and reported by the masking that follows.
+        }
+        read += files.size?.(ref.name) ?? 0
+        yield factShare * Math.min(1, read / Math.max(1, fileBytes))
+      }
+    }
     let done = 0
     for (let index = 0; index < entries.length; index++) {
       const entry = entries[index]
@@ -116,7 +149,7 @@ export function* maskSteps(har: Har, files?: SideFiles): Steps<Masked> {
           report.total += count
           report.entries.add(index)
         },
-        ids
+        ...facts
       }
       const oauth = typeof entry?.request?.url === 'string' && isOauthUrl(entry.request.url)
       for (const ref of fileRefs(entry)) {
@@ -134,11 +167,11 @@ export function* maskSteps(har: Har, files?: SideFiles): Steps<Masked> {
           report.entries.add(index)
         }
         done += files.size?.(ref.name) ?? bytes.length
-        yield fileShare * Math.min(1, done / Math.max(1, fileBytes))
+        yield factShare + (fileShare - factShare) * Math.min(1, done / Math.max(1, fileBytes))
       }
     }
   }
-  const sanitize = sanitizeSteps(har, { report, ids })
+  const sanitize = sanitizeSteps(har, { report, facts })
   let step = sanitize.next()
   while (!step.done) {
     yield fileShare + step.value * (1 - fileShare)

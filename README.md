@@ -101,7 +101,11 @@ requests were masked. **Save sanitized…** writes a masked copy of the file (`.
   `session`, `csrf`, `signature`, `passcode`, `otp`, `device_code`, `mfa_code` and similar,
   SAML and WS-Federation messages and PKCE code verifiers;
 - JSON inside a query value or a form field (`?variables={"password":…}`), masked by key name as
-  a JSON body is;
+  a JSON body is, and `key: value` pairs in a value that only starts like JSON (cut off, single
+  quotes, unquoted keys or values, a trailing comma);
+- SignalR and Blazor Server connection tokens: `connectionToken` in the negotiate response, and
+  the `id` its transports send it as (`/_blazor?id=…`, WebSocket, long polling and server-sent
+  events), and any URL parameter that holds the same token;
 - everything inside a secret-named JSON object, its keys included
   (`{"sessions": {"<id>": {…}}}`);
 - OAuth `code` and CAS `ticket` wherever the request shows a sign-in flow: a sign-in, auth or
@@ -133,8 +137,10 @@ file and host names (`main.3f9ac1….js`); static asset paths (`/_next/`, `/stat
 and script, style, font, image and media files); 24- and 40-digit hex path segments (object IDs,
 git commits); values named as identifiers (`id`, `requestId`, `etag`, `hash`, `version`, `build`
 …), in headers too (`X-Build`, `X-Commit`), and the same value wherever else it appears (an order
-ID the JSON keeps under `id` stays in `/orders/<id>`); the multipart boundary in `Content-Type`,
-which must match the body; `ETag`, request, trace and correlation ID headers, `traceparent`, CSP and digest headers,
+ID the JSON keeps under `id` stays in `/orders/<id>`), unless a credential word comes first
+(`X-Auth-Id`, `auth_req_id`, `X-Shopify-Hmac-Sha256`) or the JSON keeps it inside a secret-named
+object (`{"session": {"id": …}}`); the boundary and charset in `Content-Type`, as the body needs
+them (its other parameters are judged as any value); `ETag`, request, trace and correlation ID headers, `traceparent`, CSP and digest headers,
 `Server-Timing`; and JavaScript and CSS bodies, so code is never rewritten. Long base64 data
 under an ordinary name (an inline image in JSON) counts as random and is masked.
 
@@ -168,6 +174,12 @@ not unpacked (see the budget below), since they could not be masked.
 - In JavaScript and CSS bodies only token shapes and secret-named pairs are masked, so code is
   not rewritten; a random-looking literal in code stays.
 - HTML-escaped JSON is taken apart in attributes; escaped JSON in text nodes gets the text rules.
+- Over-masking, not leaks: a random-looking value under an ordinary name (`?cursor=`,
+  `?code_challenge=`, `"customer"`, `"paymentIntent"`) is masked unless a JSON body of the same
+  recording keeps it under an identifier's name; only JSON bodies are read for that, not JSON
+  inside HTML or other text. Under a secret-named object, a key made only of letters that happens
+  to read like a field name (about 0.4% of random 24-letter IDs) is kept, though its values are
+  masked.
 
 ## Limits
 

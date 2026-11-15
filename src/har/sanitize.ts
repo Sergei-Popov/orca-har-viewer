@@ -10,9 +10,9 @@
 
 import { decodeBase64, encodeBase64, isTextBody } from './body'
 import { splitSetCookie } from './headers'
-import { maskBodyBytes, maskBodyText } from './mask-body'
-import { MASK, QUIET, collectIds, isIdName, isSensitiveName, maskText, type Counter, type MaskKind, type MaskOptions } from './mask-text'
-import { blankStrings, isOauthUrl, maskOtherFields, maskParams, maskStrings, maskUrl } from './mask-url'
+import { collectJsonFacts, maskBodyBytes, maskBodyText } from './mask-body'
+import { MASK, emptyFacts, isIdName, isSensitiveName, maskText, quietOf, type Counter, type MaskKind, type MaskOptions, type RecordingFacts } from './mask-text'
+import { blankStrings, isHubUrl, isOauthUrl, maskOtherFields, maskParams, maskStrings, maskUrl, negotiatedHub } from './mask-url'
 import type { Har, HarCookie, HarEntry, HarNameValue, HarPage, HarPostData, HarResponse, HarWebSocketMessage } from './types'
 
 export { MASK, isSensitiveName, maskText, maskUrl, maskBodyText, maskBodyBytes, type Counter, type MaskKind }
@@ -32,32 +32,33 @@ export function emptyReport(): SanitizeReport {
   return { total: 0, headers: 0, cookies: 0, query: 0, bodies: 0, other: 0, entries: new Set(), failed: new Set() }
 }
 
-/** Counts nothing, for values that repeat ones counted elsewhere, and knows the same identifiers. */
-function quietOf(counter: Counter): Counter {
-  return counter.ids ? { add: () => undefined, ids: counter.ids } : QUIET
-}
-
 /**
- * The identifiers a recording's inline bodies keep under their JSON names (`"id": "ord_8f2a…"`),
- * found before masking so a REST path met earlier in the file keeps them too (see `Counter.ids`).
+ * What a recording tells the masking of each of its values, found before anything is masked: the
+ * identifiers its inline JSON bodies keep under their names (`"id": "ord_8f2a…"`, so a REST path
+ * met earlier in the file keeps them too), SignalR connection tokens, and the hubs it negotiated.
+ * `maskSteps` adds what the body files of a `.har.zip` say.
  */
-export function recordingIds(har: Har): Set<string> {
-  const ids = new Set<string>()
+export function recordingFacts(har: Har, facts: RecordingFacts = emptyFacts()): RecordingFacts {
   const entries: unknown[] = Array.isArray(har.log?.entries) ? har.log.entries : []
   for (const entry of entries) {
     try {
       if (!entry || typeof entry !== 'object') continue
       const { request, response } = entry as HarEntry
+      const url = request?.url
+      if (typeof url === 'string') {
+        const hub = negotiatedHub(url)
+        if (hub) facts.hubs.add(hub)
+      }
       for (const holder of [request?.postData, response?.content]) {
         if (!holder || typeof holder !== 'object' || holder.encoding === 'base64') continue
         const text = holder.text
-        if (typeof text === 'string') collectIds(text, ids)
+        if (typeof text === 'string') collectJsonFacts(text, facts)
       }
     } catch {
       // An entry this pass cannot read is reported by the masking that follows.
     }
   }
-  return ids
+  return facts
 }
 
 // ── Headers and cookies ──────────────────────────────────────────────────────────────────────
@@ -66,12 +67,11 @@ const URL_HEADERS = new Set(['referer', 'location', 'content-location', 'origin'
 
 /**
  * Headers whose random-looking values identify a request, a trace or a resource version, or
- * describe content (ETags, digests, CSP hashes, WebSocket handshakes, the multipart boundary in
- * Content-Type, which must match the body): no catch-all on them. Headers named as identifiers
- * (`X-Build`, `X-Commit`, `X-Amz-Version-Id`) are treated alike.
+ * describe content (ETags, digests, CSP hashes, WebSocket handshakes): no catch-all on them.
+ * Headers named as identifiers (`X-Build`, `X-Commit`, `X-Amz-Version-Id`) are treated alike.
  */
 const ID_HEADER =
-  /^content-type$|request-?id|requestid|trace|span|correlation|^etag$|^if-(?:none-)?match$|^if-range$|^cf-ray$|digest|md5|hash|^sec-websocket-|content-security-policy|^x-served-by$|^via$|^server-timing$|^x-cache|^x-amz-id-2$|^x-amz-cf-id$|^x-vercel-id$|^x-amzn-requestid$|^nel$|^report-to$/
+  /request-?id|requestid|trace|span|correlation|^etag$|^if-(?:none-)?match$|^if-range$|^cf-ray$|digest|md5|hash|^sec-websocket-|content-security-policy|^x-served-by$|^via$|^server-timing$|^x-cache|^x-amz-id-2$|^x-amz-cf-id$|^x-vercel-id$|^x-amzn-requestid$|^nel$|^report-to$/
 
 export function maskHeaderValue(name: string, value: string, counter: Counter, options: MaskOptions = {}): string {
   const lower = name.toLowerCase()
@@ -92,7 +92,19 @@ export function maskHeaderValue(name: string, value: string, counter: Counter, o
   }
   // `:path` repeats the request URL, which is counted already.
   if (URL_HEADERS.has(lower)) return maskUrl(value, lower === ':path' ? quietOf(counter) : counter, 'headers', options)
+  if (lower === 'content-type') return maskContentType(value, counter, options)
   return maskText(value, counter, 'headers', ID_HEADER.test(lower) || isIdName(name) ? { ...options, noEntropy: true } : options)
+}
+
+/**
+ * `multipart/form-data; boundary=…`: the boundary must match the body and the charset says how to
+ * read it, so both stay as they are; every other part is masked as any header value is.
+ */
+function maskContentType(value: string, counter: Counter, options: MaskOptions): string {
+  return value
+    .split(';')
+    .map((part) => (/^\s*(?:boundary|charset)\s*=/i.test(part) ? part : maskText(part, counter, 'headers', options)))
+    .join(';')
 }
 
 /**
@@ -267,7 +279,7 @@ export function sanitizeEntry(entry: HarEntry, counter: Counter): HarEntry {
   const out: Record<string, unknown> = {}
   const raw = entry as Record<string, unknown>
   const url = typeof entry.request?.url === 'string' ? entry.request.url : ''
-  const options: MaskOptions = { oauth: isOauthUrl(url) }
+  const options: MaskOptions = { oauth: isOauthUrl(url), hub: isHubUrl(url, counter.hubs) }
   for (const [key, value] of Object.entries(raw)) {
     if (key === 'request' && value && typeof value === 'object') {
       out.request = maskMessage(value as Record<string, unknown>, (field, item) => {
@@ -376,11 +388,11 @@ const STEP_ENTRIES = 64
 /**
  * `sanitizeHar` in steps: yields the share of entries done (0 to 1) every few entries, so a caller
  * can let the page paint and show progress; returns the masked copy and the report. A caller that
- * masked body files first passes its report and the identifiers those files kept.
+ * masked body files first passes its report and the recording's facts, those files' included.
  */
 export function* sanitizeSteps(
   har: Har,
-  context: { report?: SanitizeReport; ids?: Set<string> } = {}
+  context: { report?: SanitizeReport; facts?: RecordingFacts } = {}
 ): Generator<number, { har: Har; report: SanitizeReport }> {
   const report = context.report ?? emptyReport()
   let current = -1
@@ -390,7 +402,7 @@ export function* sanitizeSteps(
       report.total += count
       if (current >= 0) report.entries.add(current)
     },
-    ids: context.ids ?? recordingIds(har)
+    ...(context.facts ?? recordingFacts(har))
   }
   const source = Array.isArray(har.log.entries) ? har.log.entries : []
   const entries: HarEntry[] = []
