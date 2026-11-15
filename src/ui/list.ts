@@ -18,7 +18,7 @@ const COLUMNS: Column[] = [
   { key: 'path', width: 'minmax(150px, 2.4fr)', min: 150, drop: 99 },
   { key: 'type', width: '82px', min: 82, drop: 5 },
   { key: 'initiator', width: 'minmax(90px, 1fr)', min: 90, drop: 1 },
-  { key: 'transfer', width: '104px', min: 104, numeric: true, drop: 6 },
+  { key: 'transfer', width: '114px', min: 114, numeric: true, drop: 6 },
   { key: 'size', width: '70px', min: 70, numeric: true, drop: 2 },
   { key: 'time', width: '66px', min: 66, numeric: true, drop: 8 },
   { key: 'waterfall', width: 'minmax(140px, 1.8fr)', min: 140, drop: 7 }

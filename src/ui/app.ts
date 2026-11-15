@@ -28,6 +28,8 @@ type View = Dataset & { haystacks: Haystacks }
 /** What Orca hands a plugin to save; over this the bridge refuses the data. */
 const SAVE_LIMIT = 64 * 1024 * 1024
 const SEARCH_DELAY = 150
+/** Requests above which masking takes long enough to say so first. */
+const LARGE = 2000
 
 export class HarApp {
   readonly root = h('div', { className: 'hv-app' })
@@ -88,7 +90,8 @@ export class HarApp {
       close: () => this.closeDetails()
     })
     this.exporter = new ExportPopover(this.ctx)
-    this.root.addEventListener('keydown', (event) => this.onKey(event))
+    // On the document: keys pressed before anything in the viewer has focus count too.
+    document.addEventListener('keydown', (event) => this.onKey(event))
   }
 
   // ── States ──
@@ -534,9 +537,11 @@ export class HarApp {
   private async setMasking(on: boolean): Promise<void> {
     if (!this.recording) return
     if (on && !this.masked) {
-      this.toast(this.s.working)
-      // Let the notice paint before a large file is masked on this thread.
-      await new Promise((resolve) => setTimeout(resolve, 30))
+      if ((this.plain?.model.entries.length ?? 0) > LARGE) {
+        this.toast(this.s.working)
+        // Let the notice paint before a large file is masked on this thread.
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      }
       this.ensureMasked()
     }
     this.masking = on
