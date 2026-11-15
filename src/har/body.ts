@@ -4,10 +4,15 @@
 import type { HarContent, HarEntry, HarPostData } from './types'
 
 /** Body files of a .har.zip, by name. */
-export type SideFiles = { has(name: string): boolean; get(name: string): Uint8Array | null }
+export type SideFiles = {
+  has(name: string): boolean
+  get(name: string): Uint8Array | null
+  /** Whether `get` gave null because the archive's bodies together unpack to too much. */
+  overBudget?(name: string): boolean
+}
 
 export type Body =
-  | { kind: 'none'; reason: 'empty' | 'not-recorded' | 'missing-file' | 'external-file'; file?: string }
+  | { kind: 'none'; reason: 'empty' | 'not-recorded' | 'missing-file' | 'external-file' | 'over-budget'; file?: string }
   | { kind: 'text'; text: string; mimeType: string; size: number; base64: boolean; file?: string }
   | { kind: 'bytes'; bytes: Uint8Array; mimeType: string; size: number; file?: string }
 
@@ -45,7 +50,7 @@ function readBody(
   if (typeof file === 'string' && file) {
     if (!files) return { kind: 'none', reason: 'external-file', file }
     const bytes = files.get(file)
-    if (!bytes) return { kind: 'none', reason: 'missing-file', file }
+    if (!bytes) return { kind: 'none', reason: files.overBudget?.(file) ? 'over-budget' : 'missing-file', file }
     return fromBytes(bytes, mimeType, false, file)
   }
   if (typeof text !== 'string') return { kind: 'none', reason: declared === 0 ? 'empty' : 'not-recorded' }

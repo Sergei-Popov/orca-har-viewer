@@ -158,3 +158,25 @@ test('every body of the demo HAR decodes', () => {
     assert.ok(body.kind !== 'text' || typeof body.text === 'string')
   }
 })
+
+test('review 16, 20: a total unpack budget for an archive, and a cache that lets go', () => {
+  const MB = 1024 * 1024
+  const big = (letter: string) => new TextEncoder().encode(letter.repeat(MB))
+  const entry = (file: string) => ({ request: { method: 'GET', url: `https://x.example.com/${file}` }, response: { status: 200, content: { mimeType: 'text/plain', _file: file } } })
+  const har: Har = { log: { entries: ['a.txt', 'b.txt', 'c.txt'].map(entry) } }
+  const zip = zipSync({ 'har.har': new TextEncoder().encode(JSON.stringify(har)), 'a.txt': big('a'), 'b.txt': big('b'), 'c.txt': big('c') })
+  assert.ok(zip.length < 100_000, 'a small archive that unpacks to 3 MB')
+  const { files } = openHarZip(zip, { total: 2.5 * MB, cache: 1.5 * MB })
+  const a = files.get('a.txt')
+  assert.equal(a?.length, MB)
+  assert.equal(files.get('a.txt'), a, 'kept while it fits the cache')
+  assert.equal(files.get('b.txt')?.length, MB)
+  // Past the budget: not unpacked, and the body says why.
+  assert.equal(files.get('c.txt'), null)
+  assert.ok(files.overBudget?.('c.txt') && !files.overBudget?.('a.txt'))
+  const body = responseBody(har.log.entries![2], files)
+  assert.ok(body.kind === 'none' && body.reason === 'over-budget')
+  // a.txt left the cache for b.txt, and unpacks again within the budget it already counted.
+  const again = files.get('a.txt')
+  assert.ok(again !== a && again?.length === MB)
+})

@@ -2,7 +2,7 @@
 // text body files masked the same way, and the sanitized copy that "Save sanitized…" writes.
 
 import { zipSync } from '../../vendor/fflate/fflate.mjs'
-import { isMediaType, isTextual, type SideFiles } from './body'
+import { isMediaType, type SideFiles } from './body'
 import { isOauthUrl } from './mask-url'
 import { sanitizeHar, sanitizeSideFile, type Counter, type SanitizeReport } from './sanitize'
 import type { Har, HarEntry } from './types'
@@ -56,7 +56,8 @@ export function maskRecording(har: Har, files?: SideFiles): Masked {
     report,
     files: {
       has: (name) => files.has(name),
-      get: (name) => replaced.get(name) ?? files.get(name)
+      get: (name) => replaced.get(name) ?? files.get(name),
+      overBudget: (name) => !!files.overBudget?.(name)
     }
   }
 }
@@ -68,7 +69,8 @@ export function maskedHarText(masked: Masked): string {
 
 /**
  * A sanitized .har.zip: `har.har` and the body files its entries point to (masked text, binary
- * unchanged). Files nothing points to are left out, as they could hold anything.
+ * unchanged). Files nothing points to are left out, as they could hold anything, and so are files
+ * that could not be unpacked (past the archive's unpack budget): they could not be masked.
  */
 export function maskedHarZip(masked: Masked): Uint8Array {
   const contents: Record<string, Uint8Array | [Uint8Array, { level?: number }]> = {
@@ -80,7 +82,7 @@ export function maskedHarZip(masked: Masked): Uint8Array {
         if (ref.name in contents || ref.name === 'har.har') continue
         const bytes = masked.files.get(ref.name)
         // Already-compressed media gains nothing from deflate.
-        if (bytes) contents[ref.name] = [bytes, { level: isTextual(ref.mimeType) ? 6 : 0 }]
+        if (bytes) contents[ref.name] = [bytes, { level: isMediaType(ref.mimeType) ? 0 : 6 }]
       }
     }
   }

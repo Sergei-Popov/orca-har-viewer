@@ -93,3 +93,20 @@ test('summary: totals, page timings, slowest, largest and domains', () => {
   assert.equal(page2.page?.id, 'page_2')
   assert.ok(page2.finish > 1000 && page2.finish < 3000)
 })
+
+test('review 16: search keeps a bounded piece of each body, and a body it cannot read matches nothing', () => {
+  const body = `${'x'.repeat(1024 * 1024)}needle-one${'y'.repeat(2 * 1024 * 1024)}needle-two`
+  const model = buildModel({
+    log: { entries: [{ request: { method: 'GET', url: 'https://x.example.com/a' }, response: { status: 200, content: { mimeType: 'text/plain', text: body } } }] }
+  })
+  const filter = (text: string): FilterState => ({ ...emptyFilter(), text, scope: 'all' })
+  const haystacks = new Haystacks()
+  assert.deepEqual(filterEntries(model, filter('needle-one'), haystacks), [0])
+  assert.deepEqual(filterEntries(model, filter('needle-two'), haystacks), [], 'past the first 2 MB of the body')
+  class Broken extends Haystacks {
+    override get(): string[] {
+      throw new RangeError('Invalid string length')
+    }
+  }
+  assert.deepEqual(filterEntries(model, filter('needle-one'), new Broken()), [])
+})

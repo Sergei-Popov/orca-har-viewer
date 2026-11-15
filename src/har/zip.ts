@@ -9,6 +9,14 @@ import { decodeText, type SideFiles } from './body'
 /** The most a single file of the archive may unpack to. */
 export const MAX_UNPACKED = 256 * 1024 * 1024
 
+/** The most the body files of one archive may unpack to together; files past it are not unpacked. */
+export const MAX_TOTAL_UNPACKED = 512 * 1024 * 1024
+
+/** Unpacked body files kept for reuse, in bytes; the least recently used are unpacked again. */
+export const CACHE_BYTES = 64 * 1024 * 1024
+
+export type ZipLimits = { total: number; cache: number }
+
 export class ZipError extends Error {
   constructor(
     readonly code: 'not-zip' | 'no-har' | 'damaged' | 'too-large' | 'method',
@@ -35,7 +43,7 @@ export function isZip(bytes: Uint8Array): boolean {
   return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 3 || bytes[2] === 5) && (bytes[3] === 4 || bytes[3] === 6)
 }
 
-export function openHarZip(bytes: Uint8Array): HarZip {
+export function openHarZip(bytes: Uint8Array, limits: ZipLimits = { total: MAX_TOTAL_UNPACKED, cache: CACHE_BYTES }): HarZip {
   const items = readDirectory(bytes)
   const byName = new Map(items.map((item) => [item.name, item]))
   const har =
@@ -45,23 +53,52 @@ export function openHarZip(bytes: Uint8Array): HarZip {
       .sort((a, b) => a.name.split('/').length - b.name.split('/').length || a.name.length - b.name.length)[0]
   if (!har) throw new ZipError('no-har', 'This ZIP holds no .har file.')
   const text = decodeText(unpack(bytes, har))
-  const cache = new Map<string, Uint8Array | null>()
+  // Most recently used last; `cached` is the bytes it holds.
+  const cache = new Map<string, Uint8Array>()
+  let cached = 0
+  const failed = new Set<string>()
+  const over = new Set<string>()
+  // Files unpacked at least once, and what they unpacked to together.
+  const counted = new Set<string>()
+  let spent = 0
   const files: SideFiles = {
     has: (name) => byName.has(name),
     get(name) {
-      if (cache.has(name)) return cache.get(name) ?? null
+      const hit = cache.get(name)
+      if (hit) {
+        cache.delete(name)
+        cache.set(name, hit)
+        return hit
+      }
       const item = byName.get(name)
-      let result: Uint8Array | null = null
-      if (item) {
-        try {
-          result = unpack(bytes, item)
-        } catch {
-          result = null
+      if (!item || failed.has(name) || over.has(name)) return null
+      if (!counted.has(name) && spent + item.size > limits.total) {
+        over.add(name)
+        return null
+      }
+      let result: Uint8Array
+      try {
+        result = unpack(bytes, item)
+      } catch {
+        failed.add(name)
+        return null
+      }
+      if (!counted.has(name)) {
+        counted.add(name)
+        spent += item.size
+      }
+      if (result.length <= limits.cache) {
+        cache.set(name, result)
+        cached += result.length
+        for (const [oldest, value] of cache) {
+          if (cached <= limits.cache) break
+          cache.delete(oldest)
+          cached -= value.length
         }
       }
-      cache.set(name, result)
       return result
-    }
+    },
+    overBudget: (name) => over.has(name)
   }
   return { text, name: har.name, files, names: items.map((item) => item.name) }
 }
