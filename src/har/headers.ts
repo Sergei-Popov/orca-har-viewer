@@ -44,7 +44,7 @@ function splitOutsideQuotes(text: string, separator: string): string[] {
 }
 
 function unquote(text: string): string {
-  return text.length >= 2 && text[0] === '"' && text[text.length - 1] === '"' ? text.slice(1, -1).replace(/\\(.)/g, '$1') : text
+  return text.length >= 2 && text[0] === '"' && text[text.length - 1] === '"' ? text.slice(1, -1).replace(/\\(.)/g, (_, c: string) => c) : text
 }
 
 /** `a=1; b=2` → cookies. */

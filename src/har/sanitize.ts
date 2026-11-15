@@ -146,7 +146,7 @@ export function maskText(text: string, counter: Counter, kind: MaskKind = 'other
       const value = HTML_VALUE.exec(tag)
       if (!value || !value[3] || value[3] === MASK) return tag
       counter.add(kind)
-      return tag.replace(HTML_VALUE, `$1$2${MASK}$2`)
+      return tag.replace(HTML_VALUE, (_, attribute: string, quote: string) => `${attribute}${quote}${MASK}${quote}`)
     })
   }
   return out
