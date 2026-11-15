@@ -2,7 +2,8 @@
 // text body files masked the same way, and the sanitized copy that "Save sanitized…" writes.
 
 import { zipSync } from '../../vendor/fflate/fflate.mjs'
-import { isTextual, type SideFiles } from './body'
+import { isMediaType, isTextual, type SideFiles } from './body'
+import { isOauthUrl } from './mask-url'
 import { sanitizeHar, sanitizeSideFile, type Counter, type SanitizeReport } from './sanitize'
 import type { Har, HarEntry } from './types'
 
@@ -23,8 +24,9 @@ function fileRefs(entry: HarEntry): { name: string; mimeType: string }[] {
 }
 
 /**
- * Masks the HAR and, when the body files are at hand, every text body file. Binary files (images,
- * fonts, media, protobuf…) pass through unchanged. The input is never changed.
+ * Masks the HAR and, when the body files are at hand, every body file the viewer would show as
+ * text (by the same rule as inline bodies). Binary files pass through unchanged. The input is
+ * never changed.
  */
 export function maskRecording(har: Har, files?: SideFiles): Masked {
   const { har: masked, report } = sanitizeHar(har)
@@ -39,11 +41,13 @@ export function maskRecording(har: Har, files?: SideFiles): Masked {
         report.entries.add(index)
       }
     }
+    const oauth = typeof entry.request?.url === 'string' && isOauthUrl(entry.request.url)
     for (const ref of fileRefs(entry)) {
-      if (replaced.has(ref.name) || !isTextual(ref.mimeType) || !files.has(ref.name)) continue
+      // Images, audio, video and fonts are never text, so they need not even be unpacked.
+      if (replaced.has(ref.name) || isMediaType(ref.mimeType) || !files.has(ref.name)) continue
       const bytes = files.get(ref.name)
       if (!bytes) continue
-      const out = sanitizeSideFile(bytes, ref.mimeType, counter)
+      const out = sanitizeSideFile(bytes, ref.mimeType, counter, { oauth })
       if (out !== bytes) replaced.set(ref.name, out)
     }
   })

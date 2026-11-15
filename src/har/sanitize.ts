@@ -1,14 +1,21 @@
-// Masks secrets in a HAR before it is shown, copied, exported or saved: credentials headers,
-// cookies, keys and tokens in URLs, form fields, JSON bodies and WebSocket frames, and
-// token-shaped values anywhere (JWTs, `sk-…`, GitHub, Slack, AWS, Google, Stripe keys, private
-// keys). It errs on the side of masking. The input is never modified.
+// Masks known secret patterns in a HAR before it is shown, copied, exported or saved: credential
+// headers, cookies, secret-named parameters, fields and JSON keys, OAuth codes in OAuth flows,
+// and token shapes in every remaining piece of text, from bodies and WebSocket frames to page
+// titles, comments and vendor fields. Pattern-based: it errs on the side of masking, and a
+// sanitized file still deserves a read before it is shared. The input is never modified.
+//
+// The layers: mask-text.ts (names, token shapes, free text), mask-url.ts (URLs, parameter lists,
+// free-text fields), mask-body.ts (JSON in place, forms, multipart, frames, byte bodies).
 
-import { baseMime, decodeBase64, decodeText, encodeBase64, isTextual, parseJson } from './body'
-import type { Har, HarCookie, HarEntry, HarNameValue, HarPage, HarPostData, HarResponse } from './types'
+import { decodeBase64, encodeBase64, isTextBody } from './body'
+import { maskBodyBytes, maskBodyText } from './mask-body'
+import { MASK, QUIET, isSensitiveName, maskText, type Counter, type MaskKind, type MaskOptions } from './mask-text'
+import { isOauthUrl, maskOtherFields, maskParams, maskStrings, maskUrl } from './mask-url'
+import type { Har, HarCookie, HarEntry, HarNameValue, HarPage, HarPostData, HarResponse, HarWebSocketMessage } from './types'
 
-export const MASK = '[masked]'
-
-export type MaskKind = 'headers' | 'cookies' | 'query' | 'bodies' | 'other'
+export { MASK, isSensitiveName, maskText, maskUrl, maskBodyText, maskBodyBytes, type Counter, type MaskKind }
+export { maskJsonText } from './mask-body'
+export { maskFreeText } from './mask-url'
 
 export type SanitizeReport = Record<MaskKind, number> & {
   total: number
@@ -16,206 +23,11 @@ export type SanitizeReport = Record<MaskKind, number> & {
   entries: Set<number>
 }
 
-export type Counter = { add(kind: MaskKind, count?: number): void }
-
-/** Masks without counting, for values that repeat ones counted elsewhere. */
-const QUIET: Counter = { add: () => undefined }
-
-// ── Names ────────────────────────────────────────────────────────────────────────────────────
-
-const SENSITIVE_PARTS = [
-  'authorization',
-  'authentication',
-  'password',
-  'passwd',
-  'passphrase',
-  'secret',
-  'token',
-  'apikey',
-  'accesskey',
-  'privatekey',
-  'credential',
-  'session',
-  'sessid',
-  'cookie',
-  'csrf',
-  'xsrf',
-  'signature',
-  'bearer',
-  'jwt',
-  'otp'
-]
-const SENSITIVE_EXACT = new Set(['auth', 'pwd', 'pass', 'key', 'sig', 'sid', 'pin', 'ssn', 'cvv', 'cvc'])
-const SENSITIVE_SUFFIXES = ['key', 'auth', 'pwd', 'sid']
-const NOT_SENSITIVE = new Set([
-  'secwebsocketkey',
-  'secwebsocketaccept',
-  'secwebsocketextensions',
-  'tokentype',
-  'keyboard',
-  'monkey',
-  'turkey',
-  'hotkey',
-  'otpauth'
-])
-
-/** Whether a header, cookie, field or JSON key with this name holds a secret. */
-export function isSensitiveName(name: string): boolean {
-  const n = name.toLowerCase().replace(/[^a-z0-9]/g, '')
-  if (!n || NOT_SENSITIVE.has(n)) return false
-  if (SENSITIVE_EXACT.has(n)) return true
-  for (const part of SENSITIVE_PARTS) if (n.includes(part)) return true
-  for (const suffix of SENSITIVE_SUFFIXES) if (n.length > suffix.length && n.endsWith(suffix)) return true
-  return false
-}
-
-// ── Free text ────────────────────────────────────────────────────────────────────────────────
-
-/** Token shapes masked wherever they appear. */
-const TOKENS = new RegExp(
-  [
-    '-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)',
-    // JWS: base64url JSON header and payload, then a signature.
-    'eyJ[A-Za-z0-9_-]{4,}\\.eyJ[A-Za-z0-9_-]{4,}\\.[A-Za-z0-9_-]*',
-    // OpenAI, Anthropic, DeepSeek and similar: sk-…, sk-proj-…, sk-ant-…
-    '\\bsk-[A-Za-z0-9_-]{16,}',
-    '\\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}',
-    '\\bwhsec_[A-Za-z0-9+/=]{16,}',
-    '\\bgh[pousr]_[A-Za-z0-9]{30,}',
-    '\\bgithub_pat_[A-Za-z0-9_]{20,}',
-    '\\bglpat-[A-Za-z0-9_-]{20,}',
-    '\\bxox[abposr]-[A-Za-z0-9-]{10,}',
-    '\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b',
-    '\\bAIza[0-9A-Za-z_-]{35}',
-    '\\bya29\\.[0-9A-Za-z_-]{20,}',
-    '\\bnpm_[A-Za-z0-9]{36}\\b',
-    '\\bhf_[A-Za-z0-9]{30,}\\b',
-    '\\bSG\\.[A-Za-z0-9_-]{16,}\\.[A-Za-z0-9_-]{16,}',
-    '\\bshp(?:at|ss|ca|pa)_[a-fA-F0-9]{32}\\b'
-  ].join('|'),
-  'g'
-)
-/** `Bearer abc…`, `Basic dXNl…`: the scheme stays. */
-const AUTH_SCHEME = /\b(Bearer|Basic|Digest|Token|Negotiate)(\s+)([A-Za-z0-9._~+/-]{8,}=*)/g
-/** `scheme://user:password@host`: the user stays. */
-const URL_PASSWORD = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#@:"'<>]+):([^\s/?#@"'<>]+)@/gi
-/** `?name=value`, `&name=value`, `#name=value` in URLs and text. */
-const URL_PARAM = /([?&#;])([^=&#\s"'<>?]{1,64})=([^&#\s"'<>]+)/g
-/** `"password": "…"`, `token = '…'`, `apiKey: \`…\`` in code, logs and broken JSON. */
-const QUOTED_PAIR = /(["'`]?)([A-Za-z_$][\w$.-]{0,63})\1(\s*[:=]\s*)(["'`])((?:\\.|(?!\4)[^\\\r\n]){1,4096})\4/g
-/** `<meta name="csrf-token" content="…">`, `<input name="authenticity_token" value="…">`. */
-const HTML_TAG = /<(?:meta|input)\b[^>]*>/gi
-const HTML_NAME = /\b(?:name|property|id)\s*=\s*(["'])(.*?)\1/i
-const HTML_VALUE = /(\b(?:content|value)\s*=\s*)(["'])(.*?)\2/i
-
-/** Masks token-shaped values, credentials in URLs and secret-named pairs in any text. */
-export function maskText(text: string, counter: Counter, kind: MaskKind = 'other'): string {
-  if (text.length < 6) return text
-  // replace() with a global pattern always starts from the beginning.
-  let out = text.replace(TOKENS, () => {
-    counter.add(kind)
-    return MASK
-  })
-  out = out.replace(AUTH_SCHEME, (match, scheme: string, space: string, value: string) => {
-    if (!/[0-9]/.test(value) && !/[A-Z].*[a-z]|[a-z].*[A-Z]/.test(value)) return match
-    counter.add(kind)
-    return `${scheme}${space}${MASK}`
-  })
-  out = out.replace(URL_PASSWORD, (match, scheme: string, user: string) => {
-    counter.add(kind)
-    return `${scheme}${user}:${MASK}@`
-  })
-  if (out.includes('=')) {
-    out = out.replace(URL_PARAM, (match, lead: string, name: string, value: string) => {
-      if (value === MASK || !isSensitiveName(safeDecode(name))) return match
-      counter.add(kind)
-      return `${lead}${name}=${MASK}`
-    })
-  }
-  if (out.includes('"') || out.includes("'") || out.includes('`')) {
-    out = out.replace(QUOTED_PAIR, (match, q1: string, key: string, sep: string, q2: string, value: string) => {
-      if (value === MASK || !isSensitiveName(key.split('.').pop() ?? key)) return match
-      counter.add(kind)
-      return `${q1}${key}${q1}${sep}${q2}${MASK}${q2}`
-    })
-  }
-  if (out.includes('<')) {
-    out = out.replace(HTML_TAG, (tag) => {
-      const name = HTML_NAME.exec(tag)
-      if (!name || !isSensitiveName(name[2])) return tag
-      const value = HTML_VALUE.exec(tag)
-      if (!value || !value[3] || value[3] === MASK) return tag
-      counter.add(kind)
-      return tag.replace(HTML_VALUE, (_, attribute: string, quote: string) => `${attribute}${quote}${MASK}${quote}`)
-    })
-  }
-  return out
-}
-
-function safeDecode(text: string): string {
-  try {
-    return decodeURIComponent(text.replace(/\+/g, ' '))
-  } catch {
-    return text
-  }
-}
-
-// ── URLs and query strings ───────────────────────────────────────────────────────────────────
-
-/** OAuth's one-time `code` counts as a secret on redirect and callback URLs. */
-const OAUTH_PATH = /oauth|callback|authori[sz]e|signin|sign-in|login|token/i
-
-/** Masks secret query and fragment parameters, URL passwords and token-shaped path parts. */
-export function maskUrl(url: string, counter: Counter, kind: MaskKind = 'query'): string {
-  if (!url) return url
-  const hashAt = url.indexOf('#')
-  const queryAt = url.indexOf('?')
-  const baseEnd = Math.min(queryAt >= 0 ? queryAt : url.length, hashAt >= 0 ? hashAt : url.length)
-  let base = url.slice(0, baseEnd)
-  let query = queryAt >= 0 && (hashAt < 0 || queryAt < hashAt) ? url.slice(queryAt + 1, hashAt >= 0 ? hashAt : url.length) : null
-  let hash = hashAt >= 0 ? url.slice(hashAt + 1) : null
-  const oauth = OAUTH_PATH.test(base) || /(?:^|&)state=/.test(query ?? '') || /(?:^|&)state=/.test(hash ?? '')
-  const params = (part: string) =>
-    part
-      .split('&')
-      .map((pair) => {
-        const eq = pair.indexOf('=')
-        if (eq <= 0) return pair
-        const name = pair.slice(0, eq)
-        const value = pair.slice(eq + 1)
-        const decoded = safeDecode(name)
-        if (value && value !== MASK && (isSensitiveName(decoded) || (oauth && decoded === 'code'))) {
-          counter.add(kind)
-          return `${name}=${MASK}`
-        }
-        const masked = maskTokens(value, counter, kind)
-        return masked === value ? pair : `${name}=${masked}`
-      })
-      .join('&')
-  if (query !== null) query = params(query)
-  if (hash !== null && hash.includes('=')) hash = params(hash)
-  base = base.replace(URL_PASSWORD, (match, scheme: string, user: string) => {
-    counter.add(kind)
-    return `${scheme}${user}:${MASK}@`
-  })
-  base = maskTokens(base, counter, kind)
-  return `${base}${query !== null ? `?${query}` : ''}${hash !== null ? `#${hash}` : ''}`
-}
-
-/** Only the token shapes (no name rules), for values whose name was already checked. */
-function maskTokens(text: string, counter: Counter, kind: MaskKind): string {
-  if (text.length < 16) return text
-  return text.replace(TOKENS, () => {
-    counter.add(kind)
-    return MASK
-  })
-}
-
 // ── Headers and cookies ──────────────────────────────────────────────────────────────────────
 
 const URL_HEADERS = new Set(['referer', 'location', 'content-location', 'origin', ':path', 'link', 'refresh'])
 
-export function maskHeaderValue(name: string, value: string, counter: Counter): string {
+export function maskHeaderValue(name: string, value: string, counter: Counter, options: MaskOptions = {}): string {
   const lower = name.toLowerCase()
   if (typeof value !== 'string' || !value) return value
   if (lower === 'cookie') return maskCookieHeader(value, counter)
@@ -227,13 +39,13 @@ export function maskHeaderValue(name: string, value: string, counter: Counter): 
     return space > 0 && /^[A-Za-z-]+$/.test(value.slice(0, space)) ? `${value.slice(0, space)} ${MASK}` : MASK
   }
   if (isSensitiveName(lower)) {
-    if (value === MASK) return value
+    if (value === MASK || value.endsWith(` ${MASK}`)) return value
     counter.add('headers')
     return MASK
   }
   // `:path` repeats the request URL, which is counted already.
-  if (URL_HEADERS.has(lower)) return maskUrl(value, lower === ':path' ? QUIET : counter, 'headers')
-  return maskText(value, counter, 'headers')
+  if (URL_HEADERS.has(lower)) return maskUrl(value, lower === ':path' ? QUIET : counter, 'headers', options)
+  return maskText(value, counter, 'headers', options)
 }
 
 /** `a=1; b=2` → `a=[masked]; b=[masked]`. */
@@ -263,260 +75,165 @@ export function maskSetCookie(line: string, counter: Counter): string {
   return `${first.slice(0, eq)}=${MASK}${semi < 0 ? '' : line.slice(semi)}`
 }
 
-function maskHeaders(headers: HarNameValue[] | undefined, counter: Counter): HarNameValue[] | undefined {
+function maskHeaders(headers: HarNameValue[] | undefined, counter: Counter, options: MaskOptions): HarNameValue[] | undefined {
   if (!Array.isArray(headers)) return headers
-  return headers.map((header) => {
-    if (!header || typeof header.value !== 'string') return header
-    const value = maskHeaderValue(String(header.name ?? ''), header.value, counter)
-    return value === header.value ? header : { ...header, value }
+  let changed = false
+  const out = headers.map((header) => {
+    if (!header || typeof header !== 'object') return header
+    let next = header
+    if (typeof header.value === 'string') {
+      const value = maskHeaderValue(String(header.name ?? ''), header.value, counter, options)
+      if (value !== header.value) next = { ...header, value }
+    }
+    next = maskOtherFields(next, ['name', 'value'], counter)
+    if (next !== header) changed = true
+    return next
   })
+  return changed ? out : headers
 }
 
 function maskCookies(cookies: HarCookie[] | undefined, counter: Counter): HarCookie[] | undefined {
   if (!Array.isArray(cookies)) return cookies
-  return cookies.map((cookie) => {
-    if (!cookie || typeof cookie.value !== 'string' || !cookie.value || cookie.value === MASK) return cookie
-    counter.add('cookies')
-    return { ...cookie, value: MASK }
-  })
-}
-
-function maskParams(params: HarNameValue[] | undefined, counter: Counter, kind: MaskKind): HarNameValue[] | undefined {
-  if (!Array.isArray(params)) return params
-  return params.map((param) => {
-    if (!param || typeof param.value !== 'string') return param
-    if (param.value && param.value !== MASK && isSensitiveName(String(param.name ?? ''))) {
-      counter.add(kind)
-      return { ...param, value: MASK }
+  let changed = false
+  const out = cookies.map((cookie) => {
+    if (!cookie || typeof cookie !== 'object') return cookie
+    let next = cookie
+    if (typeof cookie.value === 'string' && cookie.value && cookie.value !== MASK) {
+      counter.add('cookies')
+      next = { ...cookie, value: MASK }
     }
-    const value = maskText(param.value, counter, kind)
-    return value === param.value ? param : { ...param, value }
+    next = maskOtherFields(next, ['name', 'value', 'path', 'domain', 'expires', 'httpOnly', 'secure', 'sameSite'], counter)
+    if (next !== cookie) changed = true
+    return next
   })
+  return changed ? out : cookies
 }
 
 // ── Bodies ───────────────────────────────────────────────────────────────────────────────────
 
-/** Masks a JSON value: whole values under secret-named keys, token shapes in the other strings. */
-export function maskJson(value: unknown, counter: Counter, kind: MaskKind = 'bodies', depth = 0): unknown {
-  if (typeof value === 'string') return maskText(value, counter, kind)
-  if (typeof value !== 'object' || value === null) return value
-  if (depth > 256) {
-    counter.add(kind)
-    return MASK
-  }
-  if (Array.isArray(value)) {
-    let changed = false
-    const out = value.map((item) => {
-      const next = maskJson(item, counter, kind, depth + 1)
-      if (next !== item) changed = true
-      return next
-    })
-    return changed ? out : value
-  }
-  let changed = false
-  const out: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    let next: unknown
-    if (isSensitiveName(key)) next = maskAll(item, counter, kind, depth + 1)
-    else next = maskJson(item, counter, kind, depth + 1)
-    if (next !== item) changed = true
-    out[key] = next
-  }
-  return changed ? out : value
-}
+const BODY_FIELDS = ['text', 'encoding', 'mimeType', 'size', 'compression', '_file', 'params']
 
-/** Every string and number under a secret-named key. */
-function maskAll(value: unknown, counter: Counter, kind: MaskKind, depth: number): unknown {
-  if (value === null || typeof value === 'boolean') return value
-  if (typeof value === 'string') {
-    if (!value || value === MASK) return value
-    counter.add(kind)
-    return MASK
-  }
-  if (typeof value === 'number') {
-    counter.add(kind)
-    return MASK
-  }
-  if (typeof value !== 'object' || depth > 256) {
-    counter.add(kind)
-    return MASK
-  }
-  if (Array.isArray(value)) return value.map((item) => maskAll(item, counter, kind, depth + 1))
-  const out: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) out[key] = maskAll(item, counter, kind, depth + 1)
-  return out
-}
-
-/** Masks a text body by its type: JSON by key, forms by field, everything by token shape. */
-export function maskBodyText(text: string, mimeType: string, counter: Counter, kind: MaskKind = 'bodies'): string {
-  if (!text) return text
-  const mime = baseMime(mimeType)
-  const trimmed = text.trimStart()
-  if (mime.includes('json') || trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    const value = parseJson(text)
-    if (value !== undefined && typeof value === 'object' && value !== null) {
-      const masked = maskJson(value, counter, kind)
-      return masked === value ? text : JSON.stringify(masked, null, indentOf(text))
-    }
-    if (mime.includes('ndjson') || mime.includes('jsonl') || (mime.includes('json') && text.includes('\n'))) {
-      const lines = text.split('\n')
-      let changed = false
-      const out = lines.map((line) => {
-        const value = line.trim() ? parseJson(line) : undefined
-        if (value === undefined || typeof value !== 'object' || value === null) return maskText(line, counter, kind)
-        const masked = maskJson(value, counter, kind)
-        if (masked === value) return line
-        changed = true
-        return JSON.stringify(masked)
-      })
-      if (changed) return out.join('\n')
-    }
-  }
-  if (mime === 'application/x-www-form-urlencoded' || (!mime && /^[\w.%+-]+=[^\s]*(&[\w.%+-]+=[^\s]*)*$/.test(text))) {
-    return maskForm(text, counter, kind)
-  }
-  return maskText(text, counter, kind)
-}
-
-function indentOf(text: string): number | undefined {
-  const match = /^[[{]\r?\n([ \t]+)/.exec(text.trimStart())
-  if (!match) return undefined
-  return match[1].includes('\t') ? 2 : match[1].length
-}
-
-function maskForm(text: string, counter: Counter, kind: MaskKind): string {
-  return text
-    .split('&')
-    .map((pair) => {
-      const eq = pair.indexOf('=')
-      if (eq <= 0) return pair
-      const name = pair.slice(0, eq)
-      const value = pair.slice(eq + 1)
-      if (value && value !== MASK && isSensitiveName(safeDecode(name))) {
-        counter.add(kind)
-        return `${name}=${MASK}`
-      }
-      const masked = maskTokens(safeDecode(value), counter, kind)
-      return masked === safeDecode(value) ? pair : `${name}=${encodeURIComponent(masked).replace(/%5Bmasked%5D/g, MASK)}`
-    })
-    .join('&')
-}
-
-/** A body stored inline (text or base64): masked and stored back the same way. */
+/**
+ * A body stored inline: text is masked as text; base64 is decoded and masked whenever the viewer
+ * would show it as text (`isTextBody`), then encoded back the way it came. Its other fields
+ * (comments, vendor fields) are masked as free text.
+ */
 function maskInlineBody<T extends { text?: string; encoding?: string; mimeType?: string }>(
   holder: T | undefined,
-  counter: Counter
+  counter: Counter,
+  options: MaskOptions
 ): T | undefined {
-  if (!holder || typeof holder.text !== 'string' || !holder.text) return holder
-  const mimeType = typeof holder.mimeType === 'string' ? holder.mimeType : ''
-  if (holder.encoding === 'base64') {
-    if (!isTextual(mimeType)) return holder
-    const bytes = decodeBase64(holder.text)
-    if (!bytes) return holder
-    const text = decodeText(bytes, charsetOf(mimeType))
-    const masked = maskBodyText(text, mimeType, counter)
-    if (masked === text) return holder
-    return { ...holder, text: encodeBase64(new TextEncoder().encode(masked)), mimeType: withUtf8(mimeType) }
+  if (!holder || typeof holder !== 'object') return holder
+  let out = holder
+  if (typeof holder.text === 'string' && holder.text) {
+    const mimeType = typeof holder.mimeType === 'string' ? holder.mimeType : ''
+    let text = holder.text
+    if (holder.encoding === 'base64') {
+      const bytes = decodeBase64(holder.text)
+      // Text that is not valid base64 is shown as it is, so it is masked as it is.
+      if (!bytes) text = maskBodyText(holder.text, mimeType, counter, 'bodies', options)
+      else {
+        const masked = maskBodyBytes(bytes, mimeType, counter, 'bodies', options)
+        if (masked !== bytes) text = encodeBase64(masked)
+      }
+    } else text = maskBodyText(holder.text, mimeType, counter, 'bodies', options)
+    if (text !== holder.text) out = { ...holder, text }
   }
-  const masked = maskBodyText(holder.text, mimeType, counter)
-  return masked === holder.text ? holder : { ...holder, text: masked }
+  return maskOtherFields(out, BODY_FIELDS, counter)
 }
 
-function charsetOf(mimeType: string): string {
-  const match = /charset\s*=\s*"?([\w.:-]+)/i.exec(mimeType)
-  return match ? match[1] : 'utf-8'
+/** A body file of a .har.zip, masked by the same rule as inline bodies. */
+export function sanitizeSideFile(bytes: Uint8Array, mimeType: string, counter: Counter, options: MaskOptions = {}): Uint8Array {
+  return maskBodyBytes(bytes, mimeType, counter, 'bodies', options)
 }
 
-function withUtf8(mimeType: string): string {
-  return /charset=/i.test(mimeType) ? mimeType.replace(/charset\s*=\s*"?[\w.:-]+"?/i, 'charset=utf-8') : mimeType
+function maskPostData(post: HarPostData | undefined, counter: Counter, options: MaskOptions): HarPostData | undefined {
+  if (!post || typeof post !== 'object') return post
+  // The fields repeat the text when both are there: the text counts.
+  const params = maskParams(post.params as HarNameValue[] | undefined, typeof post.text === 'string' ? QUIET : counter, 'bodies', options)
+  const withText = maskInlineBody(post, counter, options) ?? post
+  return params === post.params ? withText : { ...withText, params: params as HarPostData['params'] }
 }
 
-/** A body file of a .har.zip: text types are masked and come back as UTF-8, others unchanged. */
-export function sanitizeSideFile(bytes: Uint8Array, mimeType: string, counter: Counter): Uint8Array {
-  if (!isTextual(mimeType)) return bytes
-  const text = decodeText(bytes, charsetOf(mimeType))
-  const masked = maskBodyText(text, mimeType, counter)
-  return masked === text ? bytes : new TextEncoder().encode(masked)
+/** A WebSocket frame: text frames as text, binary frames when their bytes are text. */
+function maskFrame(message: HarWebSocketMessage, counter: Counter, options: MaskOptions): HarWebSocketMessage {
+  if (!message || typeof message !== 'object') return message
+  let out = message
+  if (typeof message.data === 'string' && message.data) {
+    let data = message.data
+    if (message.opcode === 2) {
+      const bytes = decodeBase64(message.data)
+      if (!bytes) data = maskBodyText(message.data, '', counter, 'bodies', options)
+      else if (isTextBody(bytes, '')) {
+        const masked = maskBodyBytes(bytes, '', counter, 'bodies', options)
+        if (masked !== bytes) data = encodeBase64(masked)
+      }
+    } else data = maskBodyText(message.data, '', counter, 'bodies', options)
+    if (data !== message.data) out = { ...message, data }
+  }
+  return maskOtherFields(out, ['type', 'time', 'opcode', 'data'], counter)
 }
 
 // ── Whole entries ────────────────────────────────────────────────────────────────────────────
 
-/** Copies `value` with `maskText` applied to every string inside. */
-function maskStrings(value: unknown, counter: Counter, depth = 0): unknown {
-  if (typeof value === 'string') return maskText(value, counter, 'other')
-  if (typeof value !== 'object' || value === null || depth > 256) return value
-  if (Array.isArray(value)) {
-    let changed = false
-    const out = value.map((item) => {
-      const next = maskStrings(item, counter, depth + 1)
-      if (next !== item) changed = true
-      return next
-    })
-    return changed ? out : value
-  }
-  let changed = false
-  const out: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    const next = key === 'url' && typeof item === 'string' ? maskUrl(item, counter, 'other') : maskStrings(item, counter, depth + 1)
-    if (next !== item) changed = true
-    out[key] = next
-  }
-  return changed ? out : value
-}
-
-const HANDLED_ENTRY_KEYS = new Set(['request', 'response', '_webSocketMessages', 'startedDateTime', 'time', 'timings', 'pageref', 'serverIPAddress', 'connection'])
+const PLAIN_ENTRY_KEYS = new Set(['startedDateTime', 'time', 'pageref', 'serverIPAddress', 'connection'])
+const PLAIN_MESSAGE_KEYS = new Set(['method', 'httpVersion', 'headersSize', 'bodySize', 'status', 'statusText'])
 
 export function sanitizeEntry(entry: HarEntry, counter: Counter): HarEntry {
   const out: Record<string, unknown> = {}
   const raw = entry as Record<string, unknown>
+  const url = typeof entry.request?.url === 'string' ? entry.request.url : ''
+  const options: MaskOptions = { oauth: isOauthUrl(url) }
   for (const [key, value] of Object.entries(raw)) {
     if (key === 'request' && value && typeof value === 'object') {
-      const request = value as NonNullable<HarEntry['request']>
-      out.request = {
-        ...request,
-        url: typeof request.url === 'string' ? maskUrl(request.url, counter, 'query') : request.url,
-        headers: maskHeaders(request.headers, counter),
-        cookies: maskCookies(request.cookies, counter),
-        // Mirrors the URL, which is already counted.
-        queryString: maskParams(request.queryString, QUIET, 'query'),
-        postData: maskPostData(request.postData, counter)
-      }
-      dropUndefined(out.request as Record<string, unknown>, request as Record<string, unknown>)
+      out.request = maskMessage(value as Record<string, unknown>, (field, item) => {
+        if (field === 'url') return typeof item === 'string' ? maskUrl(item, counter, 'query') : item
+        if (field === 'headers') return maskHeaders(item as HarNameValue[], counter, options)
+        if (field === 'cookies') return maskCookies(item as HarCookie[], counter)
+        // Mirrors the URL, which is counted already.
+        if (field === 'queryString') return maskParams(item as HarNameValue[], QUIET, 'query', options)
+        if (field === 'postData') return maskPostData(item as HarPostData, counter, options)
+        return undefined
+      }, counter)
     } else if (key === 'response' && value && typeof value === 'object') {
-      const response = value as HarResponse
-      out.response = {
-        ...response,
-        headers: maskHeaders(response.headers, counter),
-        cookies: maskCookies(response.cookies, counter),
-        content: maskInlineBody(response.content, counter),
-        redirectURL: typeof response.redirectURL === 'string' ? maskUrl(response.redirectURL, counter, 'headers') : response.redirectURL
-      }
-      dropUndefined(out.response as Record<string, unknown>, response as Record<string, unknown>)
+      out.response = maskMessage(value as Record<string, unknown>, (field, item) => {
+        if (field === 'headers') return maskHeaders(item as HarNameValue[], counter, options)
+        if (field === 'cookies') return maskCookies(item as HarCookie[], counter)
+        if (field === 'content') return maskInlineBody(item as HarResponse['content'], counter, options)
+        if (field === 'redirectURL') return typeof item === 'string' ? maskUrl(item, counter, 'headers') : item
+        return undefined
+      }, counter)
     } else if (key === '_webSocketMessages' && Array.isArray(value)) {
-      out[key] = value.map((message) => {
-        if (!message || typeof message.data !== 'string' || message.opcode === 2) return message
-        const data = maskBodyText(message.data, '', counter)
-        return data === message.data ? message : { ...message, data }
-      })
-    } else if (HANDLED_ENTRY_KEYS.has(key)) {
+      out[key] = value.map((message) => maskFrame(message as HarWebSocketMessage, counter, options))
+    } else if (PLAIN_ENTRY_KEYS.has(key)) {
       out[key] = value
     } else {
+      // timings (and their comment), _initiator, comment and every vendor field.
       out[key] = maskStrings(value, counter)
     }
   }
   return out as HarEntry
 }
 
-/** Keeps a field absent when it was absent, instead of present and undefined. */
-function dropUndefined(out: Record<string, unknown>, source: Record<string, unknown>): void {
-  for (const key of Object.keys(out)) if (out[key] === undefined && !(key in source)) delete out[key]
-}
-
-function maskPostData(post: HarPostData | undefined, counter: Counter): HarPostData | undefined {
-  if (!post) return post
-  const params = post.params ? maskParams(post.params as HarNameValue[], counter, 'bodies') : post.params
-  const withText = maskInlineBody(post, counter) ?? post
-  return params === post.params ? withText : { ...withText, params: params as HarPostData['params'] }
+/**
+ * A request or response: the fields `special` handles (it returns undefined for the others),
+ * plain fields as they are, and everything else as free text.
+ */
+function maskMessage(
+  message: Record<string, unknown>,
+  special: (field: string, value: unknown) => unknown,
+  counter: Counter
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [field, value] of Object.entries(message)) {
+    if (PLAIN_MESSAGE_KEYS.has(field)) {
+      out[field] = value
+      continue
+    }
+    const handled = special(field, value)
+    out[field] = handled !== undefined || value === undefined ? handled : maskStrings(value, counter)
+  }
+  return out
 }
 
 /** A masked copy of the HAR and what was masked. */
@@ -535,6 +252,7 @@ export function sanitizeHar(har: Har): { har: Har; report: SanitizeReport } {
     return sanitizeEntry(entry, counter)
   })
   current = -1
+  // Page titles are often the page's URL (Chrome writes it there), so they are masked as URLs.
   const pages = har.log.pages?.map((page: HarPage) => maskStrings(page, counter) as HarPage)
   const log: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(har.log)) {
