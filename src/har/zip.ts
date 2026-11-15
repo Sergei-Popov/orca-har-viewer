@@ -4,7 +4,7 @@
 // archive declares for it.
 
 import { Inflate } from '../../vendor/fflate/fflate.mjs'
-import { decodeText, type SideFiles } from './body'
+import { decodeText, type FileProblem, type SideFiles } from './body'
 
 /** The most a single file of the archive may unpack to. */
 export const MAX_UNPACKED = 256 * 1024 * 1024
@@ -56,8 +56,7 @@ export function openHarZip(bytes: Uint8Array, limits: ZipLimits = { total: MAX_T
   // Most recently used last; `cached` is the bytes it holds.
   const cache = new Map<string, Uint8Array>()
   let cached = 0
-  const failed = new Set<string>()
-  const over = new Set<string>()
+  const problems = new Map<string, FileProblem>()
   // Files unpacked at least once, and what they unpacked to together.
   const counted = new Set<string>()
   let spent = 0
@@ -71,21 +70,27 @@ export function openHarZip(bytes: Uint8Array, limits: ZipLimits = { total: MAX_T
         return hit
       }
       const item = byName.get(name)
-      if (!item || failed.has(name) || over.has(name)) return null
+      if (!item || problems.has(name)) return null
+      // Too large on its own says more than past the budget.
+      if (item.size > MAX_UNPACKED) {
+        problems.set(name, 'too-large')
+        return null
+      }
       if (!counted.has(name) && spent + item.size > limits.total) {
-        over.add(name)
+        problems.set(name, 'over-budget')
         return null
       }
       let result: Uint8Array
       try {
         result = unpack(bytes, item)
-      } catch {
-        failed.add(name)
+      } catch (error) {
+        problems.set(name, error instanceof ZipError && error.code === 'too-large' ? 'too-large' : 'unreadable')
         return null
       }
       if (!counted.has(name)) {
         counted.add(name)
-        spent += item.size
+        // What it really unpacked to, which `unpack` makes equal to the declared size.
+        spent += result.length
       }
       if (result.length <= limits.cache) {
         cache.set(name, result)
@@ -98,7 +103,8 @@ export function openHarZip(bytes: Uint8Array, limits: ZipLimits = { total: MAX_T
       }
       return result
     },
-    overBudget: (name) => over.has(name)
+    problem: (name) => problems.get(name) ?? null,
+    size: (name) => byName.get(name)?.size ?? 0
   }
   return { text, name: har.name, files, names: items.map((item) => item.name) }
 }
@@ -169,7 +175,11 @@ function unpack(bytes: Uint8Array, item: Item): Uint8Array {
   if (start + item.packed > bytes.length) throw new ZipError('damaged', `The ZIP entry ${item.name} is cut off.`)
   const data = bytes.subarray(start, start + item.packed)
   if (item.size > MAX_UNPACKED) throw new ZipError('too-large', `${item.name} unpacks to more than 256 MB.`)
-  if (item.method === 0) return data
+  if (item.method === 0) {
+    // Stored: the bytes are the file, so they must be the size the archive declares (and budgets).
+    if (data.length !== item.size) throw new ZipError('damaged', `${item.name} is not the size the archive declares.`)
+    return data
+  }
   if (item.method !== 8) throw new ZipError('method', `${item.name} uses ZIP method ${item.method}, which HAR Viewer cannot unpack.`)
   return inflate(data, item.size, item.name)
 }

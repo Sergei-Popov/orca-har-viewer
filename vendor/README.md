@@ -11,7 +11,8 @@ copied here as a readable, unminified ES module. It is not patched.
 
 - **Why:** reading Playwright's `.har.zip` (the HAR and its body files are DEFLATE-compressed ZIP
   entries; `src/har/zip.ts` reads the ZIP directory itself and uses fflate's streaming `Inflate`)
-  and writing the masked `.har.zip` copy (`zipSync`).
+  and writing the masked `.har.zip` copy (the streaming `Zip` with `ZipDeflate` and
+  `ZipPassThrough`, fed a megabyte at a time so a large copy is packed in slices).
 - **Source:** the npm package `fflate@0.8.3`, file `esm/browser.js`, copied unchanged.
 - **SHA-256 of `fflate.mjs`:** `b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1`
 - **Licence:** `fflate/LICENSE` (MIT), from the same package.

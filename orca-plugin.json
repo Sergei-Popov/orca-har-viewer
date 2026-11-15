@@ -5,7 +5,7 @@
   "id": "har-viewer",
   "name": "HAR Viewer",
   "version": "0.1.0",
-  "description": "HTTP Archive files in Orca's editor tabs: opens .har recordings from browsers and agents, and .har.zip from Playwright, as a network log with a fast request list and waterfall, filters by text, type, errors, page and domain, and the headers, payload, response (JSON tree, highlighted source, images and media), cookies, timing, WebSocket messages and initiator of each request. Copy a request as cURL or fetch, export a Markdown digest for coding agents, or save a copy with known secret patterns (tokens, cookies, keys) masked. Works offline and never edits the file. Independent; not affiliated with Playwright or any browser maker.",
+  "description": "Shows .har and Playwright .har.zip files as a network log: request list, waterfall, filters and each request's headers, payload, response, cookies, timing and WebSocket frames. Copy as cURL, export an agent digest, save a masked copy. Independent; not affiliated with Playwright or any browser maker.",
   "author": {
     "name": "Sergei Popov",
     "url": "https://github.com/Sergei-Popov"
@@ -15,32 +15,24 @@
   "icon": "images/icon.png",
   "cover": {
     "path": "images/cover.png",
-    "alt": "A demo recording in HAR Viewer with the dark theme: the request list and waterfall, and a failed POST request with its headers on the right."
+    "alt": "Spot failures fast: 29 requests with a waterfall, and the 500 Internal Server Error of POST export with its headers on the right."
   },
   "screenshots": [
     {
       "path": "images/filters-light.png",
-      "alt": "The light theme with the Errors filter and the Fetch/XHR chip on: four failed requests, and an overview of their status codes, domains and errors.",
-      "caption": "Filter by type, errors, page, domain or text, and see totals at a glance.",
-      "theme": "light"
+      "alt": "Narrow to what broke: Errors and Fetch/XHR show 4 of 29 requests, and the overview counts 4xx 2, 5xx 1 and (failed) 1."
     },
     {
       "path": "images/response-dark.png",
-      "alt": "A JSON response as a collapsible tree with the dark theme, next to the request list and waterfall.",
-      "caption": "JSON responses as a tree, other bodies as highlighted source, images, media or hex.",
-      "theme": "dark"
+      "alt": "Read JSON as a tree: the response of GET orders?limit=20&status=open with items Array(20) and the next-page link."
     },
     {
       "path": "images/timing-light.png",
-      "alt": "The Timing tab with the light theme: connection setup, waiting and download bars, and Server-Timing metrics for a slow request.",
-      "caption": "Where a request spent its time, including the server’s own Server-Timing.",
-      "theme": "light"
+      "alt": "See where time went: POST export waited 1.20 s for the server, and Server-Timing shows Postgres 1.10 s and app 96 ms."
     },
     {
       "path": "images/sanitize-dark.png",
-      "alt": "Secrets masked in the request list and headers with the dark theme, and the Export for agent popover with a Markdown digest.",
-      "caption": "Mask tokens and cookies, and export a Markdown digest for a coding agent.",
-      "theme": "dark"
+      "alt": "Share without secrets: 28 secret values masked in 15 requests, and an agent digest showing authorization: Bearer [masked]."
     }
   ],
   "engines": {

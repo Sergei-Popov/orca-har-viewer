@@ -1,6 +1,7 @@
-// URLs and name/value lists: each query and fragment parameter by name, OAuth's `code` in an OAuth
-// flow, URLs nested in values (`?next=/reset?token=…`, `redirect_uri=https%3A%2F%2F…`), matrix
-// parameters (`;jsessionid=…`), passwords in the authority and token-shaped path segments.
+// URLs and name/value lists: each query and fragment parameter by name (hash routes too:
+// `#/callback?code=…`), OAuth's `code` in an OAuth flow, URLs nested in values
+// (`?next=/reset?token=…`, encoded once or more), matrix parameters (`;jsessionid=…`), passwords
+// in the authority, and token-shaped or random path segments.
 
 import {
   MASK,
@@ -8,7 +9,9 @@ import {
   URL_PASSWORD,
   encodeLike,
   hasOauthNames,
+  isIdName,
   isSecretName,
+  maskRandom,
   maskText,
   maskTokens,
   maskValue,
@@ -16,7 +19,8 @@ import {
   setNestedMasker,
   type Counter,
   type MaskKind,
-  type MaskOptions
+  type MaskOptions,
+  MAX_DEPTH
 } from './mask-text'
 import type { HarNameValue } from './types'
 
@@ -36,6 +40,16 @@ function splitUrl(url: string): { base: string; query: string | null; hash: stri
   }
 }
 
+/**
+ * A fragment as a route and its parameters: `#/auth/callback?code=…` → `/auth/callback` and
+ * `code=…`; `#access_token=…&state=…` → no route; `#/settings` → a route only.
+ */
+function splitHash(hash: string): { route: string; query: string | null } {
+  const at = hash.indexOf('?')
+  if (at >= 0) return { route: hash.slice(0, at), query: hash.slice(at + 1) }
+  return hash.includes('=') ? { route: '', query: hash } : { route: hash, query: null }
+}
+
 function pairNames(part: string | null): string[] {
   if (!part) return []
   return part.split('&').map((pair) => safeDecode(pair.slice(0, Math.max(0, pair.indexOf('=')))))
@@ -44,7 +58,17 @@ function pairNames(part: string | null): string[] {
 /** Whether a URL belongs to an OAuth or OpenID flow, so its `code` is a secret. */
 export function isOauthUrl(url: string): boolean {
   const { base, query, hash } = splitUrl(url)
-  return OAUTH_PATH.test(base) || hasOauthNames(pairNames(query)) || hasOauthNames(pairNames(hash))
+  if (OAUTH_PATH.test(base) || hasOauthNames(pairNames(query))) return true
+  if (hash === null) return false
+  const route = splitHash(hash)
+  return OAUTH_PATH.test(route.route) || hasOauthNames(pairNames(route.query))
+}
+
+/** Files a page loads (scripts, styles, fonts, images): their content hashes are no secrets. */
+const STATIC_PATH = /\.(?:m?js|cjs|css|map|woff2?|ttf|otf|eot|png|jpe?g|gif|webp|avif|svg|ico|bmp|mp4|webm|mp3|ogg|wasm)$|\/(?:_next|static|assets|chunks|dist|build|fonts|images|img)\//i
+
+function isStaticPath(base: string): boolean {
+  return STATIC_PATH.test(base)
 }
 
 /** Masks secret query and fragment parameters, nested URLs, URL passwords and token-shaped path parts. */
@@ -52,7 +76,8 @@ export function maskUrl(url: string, counter: Counter, kind: MaskKind = 'query',
   if (!url) return url
   const { base: rawBase, query: rawQuery, hash: rawHash } = splitUrl(url)
   const oauth = !!options.oauth || isOauthUrl(url)
-  const inner: MaskOptions = { ...options, oauth }
+  // A file the page loads: hashes in its name and cache-busting values are not secrets.
+  const inner: MaskOptions = { ...options, oauth, noEntropy: options.noEntropy || isStaticPath(rawBase) }
   const params = (part: string) =>
     part
       .split('&')
@@ -62,18 +87,25 @@ export function maskUrl(url: string, counter: Counter, kind: MaskKind = 'query',
         const name = pair.slice(0, eq)
         const value = pair.slice(eq + 1)
         if (!value || value === MASK) return pair
-        if (isSecretName(safeDecode(name), inner)) {
+        const decodedName = safeDecode(name)
+        if (isSecretName(decodedName, inner)) {
           counter.add(kind)
           return `${name}=${MASK}`
         }
-        const masked = maskValue(value, counter, kind, inner)
+        const masked = maskValue(value, counter, kind, isIdName(decodedName) ? { ...inner, noEntropy: true } : inner)
         return masked === value ? pair : `${name}=${masked}`
       })
       .join('&')
+  const path = (part: string) => {
+    const out = maskTokens(part, counter, kind)
+    return inner.noEntropy ? out : maskRandom(out, counter, kind, { path: true })
+  }
   const query = rawQuery !== null ? params(rawQuery) : null
   let hash = rawHash
-  if (hash !== null && hash.includes('=')) hash = params(hash)
-  else if (hash) hash = maskTokens(hash, counter, kind)
+  if (hash) {
+    const route = splitHash(hash)
+    hash = `${route.route ? path(route.route) : ''}${route.query !== null ? `${hash.includes('?') ? '?' : ''}${params(route.query)}` : ''}`
+  }
   let base = rawBase
   if (base.includes('://')) {
     base = base.replace(URL_PASSWORD, (match, scheme: string, user: string) => {
@@ -88,7 +120,7 @@ export function maskUrl(url: string, counter: Counter, kind: MaskKind = 'query',
       return `;${name}=${MASK}`
     })
   }
-  base = maskTokens(base, counter, kind)
+  base = path(base)
   return `${base}${query !== null ? `?${query}` : ''}${hash !== null ? `#${hash}` : ''}`
 }
 
@@ -98,16 +130,34 @@ export function looksLikeUrl(text: string): boolean {
 }
 
 /**
- * The nested-value masker for `maskValue`: decodes a value, masks it as a URL when it is one, else
- * as text (where `name=value` pairs are found by name), and encodes it back the way it came.
+ * The nested-value masker for `maskValue`: decodes a value as many times as it was encoded
+ * (`%252Freset%253Ftoken%253D…` twice; each pass counts as a level of nesting), masks it as a URL
+ * when it is one, else as text (where `name=value` pairs are found by name), and encodes it back
+ * the way it came.
  */
 function maskNested(value: string, counter: Counter, kind: MaskKind, options: MaskOptions): string {
-  const decoded = safeDecode(value)
+  const layers = [value]
+  let depth = options.depth ?? 1
+  for (;;) {
+    const last = layers[layers.length - 1]
+    const next = safeDecode(last)
+    if (next === last) break
+    layers.push(next)
+    if (!/%[0-9A-Fa-f]{2}/.test(next) || depth >= MAX_DEPTH) break
+    depth++
+  }
+  const decoded = layers[layers.length - 1]
+  const inner: MaskOptions = { ...options, depth }
   let masked: string
-  if (looksLikeUrl(decoded) || (decoded.includes('?') && !/\s/.test(decoded))) masked = maskUrl(decoded, counter, kind, options)
-  else if (decoded.includes('=')) masked = maskText(decoded, counter, kind, options)
-  else masked = maskTokens(decoded, counter, kind)
-  return masked === decoded ? value : encodeLike(value, decoded, masked)
+  if (looksLikeUrl(decoded) || (decoded.includes('?') && !/\s/.test(decoded))) masked = maskUrl(decoded, counter, kind, inner)
+  else if (decoded.includes('=')) masked = maskText(decoded, counter, kind, inner)
+  else {
+    masked = maskTokens(decoded, counter, kind)
+    if (!inner.noEntropy) masked = maskRandom(masked, counter, kind)
+  }
+  if (masked === decoded) return value
+  for (let i = layers.length - 1; i >= 1; i--) masked = encodeLike(layers[i - 1], layers[i], masked)
+  return masked
 }
 
 setNestedMasker(maskNested)
@@ -128,20 +178,26 @@ export function maskParams(
   kind: MaskKind,
   options: MaskOptions = {}
 ): HarNameValue[] | undefined {
-  if (!Array.isArray(params)) return params
+  // A list of another shape (an object of names to values): every string in it, by name.
+  if (!Array.isArray(params)) return params === undefined ? params : (maskStrings(params, counter, kind) as HarNameValue[])
   const names = params.map((param) => (param && typeof param.name === 'string' ? safeDecode(param.name) : ''))
   const inner: MaskOptions = { ...options, oauth: options.oauth || hasOauthNames(names) }
   let changed = false
   const out = params.map((param, index) => {
-    if (!param || typeof param !== 'object') return param
+    if (!param || typeof param !== 'object') return maskStrings(param, counter, kind) as HarNameValue
     let next: HarNameValue = param
+    const secret = isSecretName(names[index], inner)
     if (typeof param.value === 'string' && param.value && param.value !== MASK) {
       let value: string
-      if (isSecretName(names[index], inner)) {
+      if (secret) {
         counter.add(kind)
         value = MASK
-      } else value = maskValue(param.value, counter, kind, inner)
+      } else value = maskValue(param.value, counter, kind, isIdName(names[index]) ? { ...inner, noEntropy: true } : inner)
       if (value !== param.value) next = { ...param, value }
+    } else if (param.value !== undefined && typeof param.value !== 'string') {
+      // A value of another type (an array, a number): every string in it, all of them when the name is secret.
+      const value = secret ? blankStrings(param.value, counter, kind) : maskStrings(param.value, counter, kind)
+      if (value !== param.value) next = { ...param, value: value as string }
     }
     const rest = maskOtherFields(next, ['name', 'value'], counter)
     if (rest !== param) changed = true
@@ -164,14 +220,18 @@ export function maskOtherFields<T extends object>(value: T, handled: string[], c
   return (out as T | null) ?? value
 }
 
-/** Copies `value` with every string inside masked as free text (URLs as URLs). */
-export function maskStrings(value: unknown, counter: Counter, kind: MaskKind = 'other', depth = 0): unknown {
-  if (typeof value === 'string') return maskFreeText(value, counter, kind)
+/**
+ * Copies `value` with every string inside masked as free text (URLs as URLs): whole values under
+ * secret-named keys (every string and number inside them), identifiers by their name without the
+ * catch-all, and keys that look random.
+ */
+export function maskStrings(value: unknown, counter: Counter, kind: MaskKind = 'other', depth = 0, options: MaskOptions = {}): unknown {
+  if (typeof value === 'string') return maskFreeText(value, counter, kind, options)
   if (typeof value !== 'object' || value === null || depth > 256) return value
   if (Array.isArray(value)) {
     let changed = false
     const out = value.map((item) => {
-      const next = maskStrings(item, counter, kind, depth + 1)
+      const next = maskStrings(item, counter, kind, depth + 1, options)
       if (next !== item) changed = true
       return next
     })
@@ -181,12 +241,33 @@ export function maskStrings(value: unknown, counter: Counter, kind: MaskKind = '
   const out: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     let next: unknown
-    if (typeof item === 'string' && item && item !== MASK && isSecretName(key)) {
-      counter.add(kind)
-      next = MASK
-    } else next = maskStrings(item, counter, kind, depth + 1)
-    if (next !== item) changed = true
-    out[key] = next
+    if (isSecretName(key)) next = blankStrings(item, counter, kind, depth + 1)
+    else next = maskStrings(item, counter, kind, depth + 1, isIdName(key) ? { ...options, noEntropy: true } : options)
+    let name = key
+    if (key.length >= 20) {
+      name = maskRandom(maskTokens(key, counter, kind), counter, kind)
+      while (name !== key && name in out) name = `${name}#`
+    }
+    if (next !== item || name !== key) changed = true
+    out[name] = next
   }
   return changed ? out : value
+}
+
+/** Copies `value` with every string and number inside replaced by `[masked]`: a secret, whatever its shape. */
+export function blankStrings(value: unknown, counter: Counter, kind: MaskKind = 'other', depth = 0): unknown {
+  if (typeof value === 'string') {
+    if (!value || value === MASK) return value
+    counter.add(kind)
+    return MASK
+  }
+  if (typeof value === 'number') {
+    counter.add(kind)
+    return MASK
+  }
+  if (typeof value !== 'object' || value === null || depth > 256) return value
+  if (Array.isArray(value)) return value.map((item) => blankStrings(item, counter, kind, depth + 1))
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) out[key] = blankStrings(item, counter, kind, depth + 1)
+  return out
 }

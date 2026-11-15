@@ -54,13 +54,14 @@ const MAX_MESSAGES = 20
 export function buildDigest(model: Model, entries: Entry[], options: DigestOptions): string {
   const maxBody = options.maxBody ?? DIGEST_MAX_BODY
   const lines: string[] = [`# HAR digest: ${options.title}`, '']
-  const source = [model.creator || 'unknown tool', `${model.entries.length.toLocaleString('en')} requests in the file`]
+  const count = model.entries.length
+  const source = [model.creator || 'unknown tool', `${count.toLocaleString('en')} ${count === 1 ? 'request' : 'requests'} in the file`]
   if (model.pages.length === 1) source.push(`page "${model.pages[0].title}"`)
   else if (model.pages.length > 1) source.push(`${model.pages.length} pages`)
   lines.push(`- Source: ${source.join(' · ')}`)
   if (model.start) lines.push(`- Recorded: ${dateTime(model.start)}`)
   lines.push(
-    `- Secrets are masked as \`[masked]\`.${options.bodies ? ` Bodies are cut to ${maxBody.toLocaleString('en')} characters.` : ' Bodies are left out.'} Times are from the first request.`,
+    `- Known secret patterns are masked as \`[masked]\`; values with no known pattern are not, so review before sharing.${options.bodies ? ` Bodies are cut to ${maxBody.toLocaleString('en')} characters.` : ' Bodies are left out.'} Times are from the first request.`,
     ''
   )
   if (!entries.length) {
@@ -138,6 +139,9 @@ function headerBlock(title: string, headers: HarNameValue[] | undefined, noisy: 
 function bodyBlock(title: string, body: Body, maxBody: number): string[] {
   if (body.kind === 'none') {
     if (body.reason === 'external-file' || body.reason === 'missing-file') return [`${title}: in a separate file (${body.file}), not included.`, '']
+    if (body.reason === 'over-budget') return [`${title}: in ${body.file}, not unpacked (the archive's bodies unpack to more than 512 MB together), not included.`, '']
+    if (body.reason === 'too-large') return [`${title}: in ${body.file}, which unpacks to more than 256 MB, not included.`, '']
+    if (body.reason === 'unreadable') return [`${title}: in ${body.file}, which is damaged or cannot be unpacked, not included.`, '']
     return []
   }
   const mime = body.mimeType || 'unknown type'

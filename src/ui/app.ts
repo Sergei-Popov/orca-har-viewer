@@ -6,7 +6,7 @@ import { h, svg } from '../dom'
 import { count, formatBytes, formatMs } from '../format'
 import type { SideFiles } from '../har/body'
 import { RESOURCE_TYPES, type ResourceType } from '../har/classify'
-import { maskedHarText, maskedHarZip, maskRecording, type Masked } from '../har/masked'
+import { maskedHarText, maskedHarZipSteps, maskingWeight, maskRecording, maskSteps, runSteps, runStepsAsync, type Masked } from '../har/masked'
 import { buildModel } from '../har/model'
 import { emptyFilter, filterEntries, Haystacks, sortIndexes, type FilterState, type Scope, type Sort, type SortKey } from '../har/query'
 import type { ReadIssue } from '../har/read'
@@ -29,8 +29,15 @@ type View = Dataset & { haystacks: Haystacks }
 /** What Orca hands a plugin to save; over this the bridge refuses the data. */
 const SAVE_LIMIT = 64 * 1024 * 1024
 const SEARCH_DELAY = 150
-/** Requests above which masking takes long enough to say so first. */
-const LARGE = 2000
+/**
+ * Text (bytes) up to which masking, or building the sanitized copy, runs at once. Past it the
+ * work runs in slices with progress, as the save dialog must open within Orca's few-second
+ * gesture window and a busy page cannot paint.
+ */
+const QUICK = 16 * 1024 * 1024
+
+type MaskedView = View & { result: Masked }
+type Copy = { data: Uint8Array; suggestedName: string; mimeType: string }
 
 export class HarApp {
   readonly root = h('div', { className: 'hv-app' })
@@ -38,8 +45,16 @@ export class HarApp {
   private readonly s: Strings
   private recording: Recording | null = null
   private plain: View | null = null
-  private masked: (View & { result: Masked }) | null = null
+  private masked: MaskedView | null = null
   private masking = false
+  /** Bumped by every `open`, so work started for an earlier file is dropped. */
+  private generation = 0
+  private job: Promise<MaskedView | null> | null = null
+  private progress: string | null = null
+  private readonly progressText = h('span')
+  /** A sanitized copy built ahead of the click that saves it. */
+  private prepared: Copy | null = null
+  private preparing = false
   private filter: FilterState = emptyFilter()
   private sort: Sort = null
   private current: number | null = null
@@ -121,8 +136,15 @@ export class HarApp {
   open(recording: Recording): void {
     this.recording = recording
     this.plain = this.view(recording.har, recording.files)
+    this.generation++
     this.masked = null
-    if (this.masking) this.ensureMasked()
+    this.job = null
+    this.progress = null
+    this.prepared = null
+    this.preparing = false
+    // Masking stays on across reloads: at once for a light file, else when the masked copy is ready.
+    const remask = this.masking
+    this.masking = remask && this.isLight() && !!this.maskNow()
     const model = this.plain.model
     if (this.current !== null && this.current >= model.entries.length) this.current = null
     this.picked = new Set([...this.picked].filter((i) => i < model.entries.length))
@@ -132,6 +154,7 @@ export class HarApp {
     if (!this.built) this.build()
     this.fillControls()
     this.refresh()
+    if (remask && !this.masking) void this.setMasking(true)
   }
 
   private view(har: Har, files?: SideFiles): View {
@@ -191,7 +214,7 @@ export class HarApp {
     this.exportButton.title = `${s.export}: ${s.exportHint}`
     this.exportButton.setAttribute('aria-label', s.export)
     this.exportButton.dataset.exportToggle = '1'
-    this.exportButton.addEventListener('click', () => this.toggleExport())
+    this.exportButton.addEventListener('click', () => void this.toggleExport())
     this.saveButton.replaceChildren(svg(icon('save')), h('span', { className: 'hv-label' }, s.saveSanitized))
     this.saveButton.title = s.saveSanitizedHint
     this.saveButton.setAttribute('aria-label', s.saveSanitized)
@@ -345,6 +368,7 @@ export class HarApp {
     if (recording && !recording.files && this.plain?.model.entries.some((e) => e.raw.response?.content?._file || e.raw.request?.postData?._file)) {
       out.push(h('div', { className: 'hv-notice hv-warn' }, svg(icon('warning')), h('span', {}, s.externalBodies)))
     }
+    if (this.progress) out.push(h('div', { className: 'hv-notice hv-masked', role: 'status' }, svg(icon('shield')), this.progressText))
     if (this.masking && this.masked) {
       const report = this.masked.result.report
       const text = report.total
@@ -353,6 +377,17 @@ export class HarApp {
       const show = h('button', { type: 'button', className: 'hv-btn' }, s.showValues)
       show.addEventListener('click', () => void this.setMasking(false))
       out.push(h('div', { className: 'hv-notice hv-masked', role: 'status' }, svg(icon('shield')), h('span', {}, text), show))
+    }
+    const failed = this.masked?.result.report.failed.size ?? 0
+    if ((this.masking || this.prepared) && failed) {
+      out.push(h('div', { className: 'hv-notice hv-warn', role: 'alert' }, svg(icon('warning')), h('span', {}, fill(s.maskFailed, { requests: s.inRequests(failed) }))))
+    }
+    if (this.prepared) {
+      const copy = this.prepared
+      const save = h('button', { type: 'button', className: 'hv-btn' }, s.saveCopy)
+      save.addEventListener('click', () => this.save(copy))
+      const text = fill(s.copyReady, { size: this.ctx.bytes(copy.data.length) })
+      out.push(h('div', { className: 'hv-notice hv-masked', role: 'status' }, svg(icon('save')), h('span', {}, text), save))
     }
     this.notices.replaceChildren(...out)
   }
@@ -523,25 +558,72 @@ export class HarApp {
 
   // ── Masking, export, saving ──
 
-  private ensureMasked(): View & { result: Masked } {
-    if (!this.masked) {
-      const recording = this.recording as Recording
-      const result = maskRecording(recording.har, recording.files)
-      const view = this.view(result.har, result.files)
-      this.masked = { ...view, maskedEntries: result.report.entries, result }
-    }
+  /** Whether masking this recording, or building its copy, is quick enough to run at once. */
+  private isLight(): boolean {
+    const recording = this.recording
+    return !!recording && maskingWeight(recording.har, recording.files) <= QUICK
+  }
+
+  private finishMasking(result: Masked): MaskedView {
+    const view = this.view(result.har, result.files)
+    this.masked = { ...view, maskedEntries: result.report.entries, result }
     return this.masked
+  }
+
+  /** Never silently: masking stays off and the toast says why. */
+  private maskingFailed(error: unknown): null {
+    console.warn('[har-viewer] cannot mask this file', error)
+    this.toast(fill(this.s.cannotMask, { message: error instanceof Error ? error.message : String(error) }))
+    return null
+  }
+
+  /** The masked view, built now on this thread; null when masking failed. */
+  private maskNow(): MaskedView | null {
+    if (this.masked) return this.masked
+    const recording = this.recording as Recording
+    try {
+      return this.finishMasking(maskRecording(recording.har, recording.files))
+    } catch (error) {
+      return this.maskingFailed(error)
+    }
+  }
+
+  /** The masked view: at once for a light recording, else in slices with progress. Null when it failed or the file changed. */
+  private maskedView(): Promise<MaskedView | null> {
+    if (this.masked) return Promise.resolve(this.masked)
+    if (this.job) return this.job
+    if (this.isLight()) return Promise.resolve(this.maskNow())
+    const recording = this.recording as Recording
+    const generation = this.generation
+    const current = () => generation === this.generation
+    this.showProgress(this.s.maskingProgress, 0)
+    this.job = runStepsAsync(maskSteps(recording.har, recording.files), (done) => current() && this.showProgress(this.s.maskingProgress, done))
+      .then(
+        (result) => (current() ? this.finishMasking(result) : null),
+        (error) => (current() ? this.maskingFailed(error) : null)
+      )
+      .finally(() => {
+        if (!current()) return
+        this.job = null
+        this.showProgress(null)
+      })
+    return this.job
+  }
+
+  /** Shows (or with null, hides) the progress notice; only its text changes while it stays. */
+  private showProgress(template: string | null, done = 0): void {
+    const shown = !!this.progress
+    this.progress = template
+    if (template) this.progressText.textContent = fill(template, { percent: `${Math.min(100, Math.round(done * 100))}%` })
+    if (shown !== !!template) this.renderNotices()
   }
 
   private async setMasking(on: boolean): Promise<void> {
     if (!this.recording) return
-    if (on && !this.masked) {
-      if ((this.plain?.model.entries.length ?? 0) > LARGE) {
-        this.toast(this.s.working)
-        // Let the notice paint before a large file is masked on this thread.
-        await new Promise((resolve) => setTimeout(resolve, 30))
-      }
-      this.ensureMasked()
+    if (on) {
+      const generation = this.generation
+      const masked = await this.maskedView()
+      if (!masked || generation !== this.generation) return
     }
     this.masking = on
     this.detailsKey = ''
@@ -549,45 +631,109 @@ export class HarApp {
     this.refresh()
   }
 
-  private toggleExport(): void {
+  private async toggleExport(): Promise<void> {
     if (!this.recording) return
-    const masked = this.ensureMasked()
+    const generation = this.generation
+    const masked = this.masked ?? (await this.maskedView())
+    if (!masked || generation !== this.generation) return
     const model = masked.model
     const selected = [...this.picked].filter((i) => i < model.entries.length)
     const failed = this.order.filter((i) => model.entries[i].isError)
     this.exporter.toggle({ model, files: masked.files, selected: sortByOrder(selected, this.order), failed, visible: this.order, date: isoDate(model.start) })
   }
 
-  /** Runs inside the click: Orca's save dialog needs the gesture, so nothing here awaits first. */
+  /**
+   * "Save sanitized…". Orca opens the save dialog only within a few seconds of the click, so the
+   * copy is built inside the click only when that is quick. A heavy one is built in slices with
+   * progress first, and then a notice offers to save it with one more click.
+   */
   private saveSanitized(): void {
-    const saveAs = this.ctx.saveAs
     const recording = this.recording
-    if (!saveAs || !recording) return
-    const masked = this.ensureMasked()
-    const date = isoDate(masked.model.start)
-    let data: Uint8Array
+    if (!this.ctx.saveAs || !recording) return
+    if (this.prepared) return this.save(this.prepared)
+    if (this.preparing) return
+    if (!this.isLight()) {
+      void this.prepareCopy()
+      return
+    }
+    const masked = this.maskNow()
+    if (!masked) return
+    let copy: Copy | null
     try {
-      data = recording.zip ? maskedHarZip(masked.result) : new TextEncoder().encode(maskedHarText(masked.result))
+      copy = this.copyOf(recording, masked, recording.zip ? runSteps(maskedHarZipSteps(masked.result)) : null)
     } catch (error) {
       console.warn('[har-viewer] cannot build the sanitized copy', error)
       this.toast(this.s.saveFailed)
       return
     }
+    if (copy) this.save(copy, true)
+  }
+
+  /** Builds the copy in slices with progress and offers it for saving. */
+  private async prepareCopy(): Promise<void> {
+    const recording = this.recording as Recording
+    const generation = this.generation
+    const current = () => generation === this.generation
+    this.preparing = true
+    try {
+      const masked = await this.maskedView()
+      if (!masked || !current()) return
+      let zip: Uint8Array | null = null
+      if (recording.zip) {
+        this.showProgress(this.s.buildingCopy, 0)
+        zip = await runStepsAsync(maskedHarZipSteps(masked.result), (done) => current() && this.showProgress(this.s.buildingCopy, done))
+      }
+      if (!current()) return
+      this.prepared = this.copyOf(recording, masked, zip)
+    } catch (error) {
+      console.warn('[har-viewer] cannot build the sanitized copy', error)
+      if (current()) this.toast(this.s.saveFailed)
+    } finally {
+      if (current()) {
+        this.preparing = false
+        this.progress = null
+        this.renderNotices()
+      }
+    }
+  }
+
+  /** The file to save; null (with a toast) when it is more than Orca saves. */
+  private copyOf(recording: Recording, masked: MaskedView, zip: Uint8Array | null): Copy | null {
+    const data = zip ?? new TextEncoder().encode(maskedHarText(masked.result))
     if (data.length > SAVE_LIMIT) {
       this.toast(this.s.saveTooBig)
-      return
+      return null
     }
-    saveAs({
-      suggestedName: `sanitized-${date}.${recording.zip ? 'har.zip' : 'har'}`,
-      mimeType: recording.zip ? 'application/zip' : 'application/json',
-      data
-    })
+    return {
+      data,
+      suggestedName: `sanitized-${isoDate(masked.model.start)}.${recording.zip ? 'har.zip' : 'har'}`,
+      mimeType: recording.zip ? 'application/zip' : 'application/json'
+    }
+  }
+
+  /**
+   * Opens the save dialog for a built copy. When it was built inside the click and the dialog is
+   * refused anyway (the click's gesture ran out on a slow machine), the copy is kept and offered.
+   */
+  private save(copy: Copy, offerOnRefusal = false): void {
+    const saveAs = this.ctx.saveAs
+    if (!saveAs) return
+    const generation = this.generation
+    saveAs({ suggestedName: copy.suggestedName, mimeType: copy.mimeType, data: copy.data })
       .then((result) => {
-        if (result.status === 'saved') this.toast(this.s.saved)
+        if (result.status !== 'saved') return
+        this.toast(this.s.saved)
+        if (generation === this.generation && this.prepared === copy) {
+          this.prepared = null
+          this.renderNotices()
+        }
       })
       .catch((error) => {
         console.warn('[har-viewer] save failed', error)
-        this.toast(this.s.saveFailed)
+        if (offerOnRefusal && generation === this.generation) {
+          this.prepared = copy
+          this.renderNotices()
+        } else this.toast(this.s.saveFailed)
       })
   }
 

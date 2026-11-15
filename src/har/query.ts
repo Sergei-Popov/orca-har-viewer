@@ -83,12 +83,22 @@ export function parseQuery(text: string): Term[] {
  */
 export const SEARCH_BODY_CHARS = 2 * 1024 * 1024
 
+/**
+ * Characters of body text kept for search across all entries. Past it, further bodies are read
+ * again for every search instead of kept, so a crafted file cannot fill memory with haystacks.
+ */
+export const SEARCH_TOTAL_CHARS = 64 * 1024 * 1024
+
 export class Haystacks {
   private readonly url = new Map<number, string>()
   private readonly headers = new Map<number, string>()
   private readonly bodies = new Map<number, string>()
+  private kept = 0
 
-  constructor(private readonly files?: SideFiles) {}
+  constructor(
+    private readonly files?: SideFiles,
+    private readonly total = SEARCH_TOTAL_CHARS
+  ) {}
 
   get(entry: Entry, scope: Scope): string[] {
     const parts = [this.urlOf(entry)]
@@ -144,7 +154,10 @@ export class Haystacks {
       }
       // Two parts at least, so the join copies: a slice alone could keep its whole body alive.
       text = ['', ...parts].join('\n').toLowerCase()
-      this.bodies.set(entry.index, text)
+      if (this.kept + text.length <= this.total) {
+        this.bodies.set(entry.index, text)
+        this.kept += text.length
+      }
     }
     return text
   }

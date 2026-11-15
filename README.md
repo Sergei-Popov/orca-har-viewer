@@ -87,27 +87,58 @@ in copied cURL and fetch commands, and in exports, and a banner says how many va
 requests were masked. **Save sanitized…** writes a masked copy of the file (`.har`, or
 `.har.zip` for a `.har.zip`). What counts as a secret:
 
-- `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie` values (cookie names,
-  the auth scheme and cookie attributes stay), and headers named like `X-Api-Key` or
-  `X-Auth-Token`;
-- query parameters (in the URL and in the HAR's query string list), form fields (urlencoded,
-  multipart and plain-text forms), JSON keys and HTML `meta`/`input` values named like `token`,
-  `password`, `secret`, `api_key`, `session`, `csrf`, `signature`, `passcode` and similar,
-  SAML messages and PKCE code verifiers;
-- OAuth `code` wherever the request shows an OAuth flow: a sign-in or callback path, or
-  `state`, `grant_type` or `redirect_uri` beside it, in URLs, forms and `form_post` pages;
-- URLs nested in parameter values (`?next=/reset?token=…`, `redirect_uri=https%3A…`), and
-  passwords in URLs;
+- `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie` values, including several
+  cookies folded into one `Set-Cookie` with `, ` and cookies without a name (cookie names, the
+  auth scheme and cookie attributes stay), and headers named like `X-Api-Key` or `X-Auth-Token`;
+- query parameters (in the URL, its fragment and hash routes such as `#/callback?code=…`, and in
+  the HAR's query string list), form fields (urlencoded, multipart and plain-text forms), JSON
+  keys, `name: value` and `name=value` lines (YAML, `.properties`, STOMP headers) and HTML
+  `meta`/`input` values, quoted or not, named like `token`, `password`, `secret`, `api_key`,
+  `session`, `csrf`, `signature`, `passcode`, `otp`, `device_code`, `mfa_code` and similar,
+  SAML and WS-Federation messages and PKCE code verifiers;
+- everything inside a secret-named JSON object, its keys included
+  (`{"sessions": {"<id>": {…}}}`);
+- OAuth `code` and CAS `ticket` wherever the request shows a sign-in flow: a sign-in, auth or
+  callback path, or `state`, `grant_type` or `redirect_uri` beside it, in URLs, forms, JSON and
+  `form_post` pages;
+- URLs nested in parameter values (`?next=/reset?token=…`), also when encoded twice or more,
+  and passwords in URLs;
 - tokens recognisable by their shape anywhere in text, JSON keys included: JWTs, private keys
   and well-known API key formats (OpenAI, Anthropic, GitHub, GitLab, Slack, AWS, Google, Stripe
-  and others).
+  and others);
+- values that look random, wherever they are (see below).
 
 Bodies are taken apart before they are searched: JSON is masked in place, so only the masked
-values change and 64-bit integers, key order and spacing stay as they were; NDJSON, SignalR and
-Socket.IO frames, and multipart parts are masked as what they hold. Any body the viewer shows as
-text is masked as text, whatever its declared type, and written back the way it came (base64
-stays base64, a charset stays that charset). Page titles, comments and tools' own fields are
-masked as text too.
+values change and 64-bit integers, key order and spacing stay as they were. NDJSON, SignalR,
+Socket.IO (WebSocket and long-polling, Engine.IO 3 and 4, binary events), SockJS and STOMP
+frames, server-sent events, JSON behind XSSI guards and in JSONP calls, JSON in HTML (script
+blocks, inline state, escaped attributes), JSON inside other text and multipart parts are masked
+as what they hold. Any body the viewer shows as text is masked as text, whatever its declared
+type, and written back the way it came (base64 stays base64, a charset stays that charset, UTF-16
+under any of its labels or a byte order mark, byte for byte around the masked values). Page
+titles, comments, the recording tool's own fields and fields of unexpected types are masked too.
+
+**Values that look random.** A run of 20 or more characters from the base64, base64url or hex
+alphabets that mixes letters and digits, carries at least 3.5 bits of entropy a character (3 for
+hex) and is not shaped like words (`user_profile_v2`, `getUserSettings2024`) is masked in values,
+keys, URL paths and headers, whatever its name. What stays, because you need to read it:
+UUIDs; `sha256-`/`sha384-`/`sha512-` integrity hashes; `data:` base64 payloads; content hashes in
+file and host names (`main.3f9ac1….js`); static asset paths (`/_next/`, `/static/`, `/assets/`
+and script, style, font, image and media files); 24- and 40-digit hex path segments (object IDs,
+git commits); values named as identifiers (`id`, `requestId`, `etag`, `hash`, `version`, `build`
+…); `ETag`, request, trace and correlation ID headers, `traceparent`, CSP and digest headers,
+`Server-Timing`; and JavaScript and CSS bodies, so code is never rewritten. Long base64 data
+under an ordinary name (an inline image in JSON) counts as random and is masked.
+
+**Depth.** Nesting is followed four levels deep (a URL in a parameter, JSON in a string, each
+decoding pass of a value encoded twice). A value nested deeper is masked whole when anything in
+it, decoded, is secret. Multipart nested deeper than four levels is replaced with `[masked]`.
+
+**Never silently.** If masking a request fails, every value in it is replaced with `[masked]`
+(the method, status, timings and header names stay, the URL keeps its origin), its entry in a
+saved copy says so in a comment, and a notice counts those requests. A body file that cannot be
+masked is replaced with `[masked]`. If the file as a whole cannot be masked, masking stays off
+and a message says why.
 
 Masking works on known patterns, so review a sanitized file before sharing it: a secret with no
 pattern it knows stays. Binary bodies (images, fonts, media, protobuf and other bytes that are
@@ -115,15 +146,37 @@ not text) and binary WebSocket frames that are not text are copied unchanged. A 
 `.har.zip` keeps only the body files its requests point to, and leaves out body files that were
 not unpacked (see the budget below), since they could not be masked.
 
+**Known limits.** These are not masked, or not fully, by design or for now:
+
+- A secret under an ordinary name that is short or reads like words (`"note": "hunter2"`), or
+  digits only (a card number under `"number"`): no pattern can tell it from ordinary data.
+- Parameter names outside the list that a protocol of its own treats as secret: name-based rules
+  cover the common names and the sign-in flows above.
+- Binary formats (protobuf, MessagePack, CBOR, compressed bytes) and binary WebSocket frames
+  that are not text: masking reads text, and rewriting unknown bytes could corrupt them.
+- Wire formats other than those listed (for example Engine.IO 3 base64 binary packets, GraphQL
+  multipart uploads beyond their form fields): their JSON is still found and masked, but their
+  framing is not taken apart.
+- In JavaScript and CSS bodies only token shapes and secret-named pairs are masked, so code is
+  not rewritten; a random-looking literal in code stays.
+- HTML-escaped JSON is taken apart in attributes; escaped JSON in text nodes gets the text rules.
+
 ## Limits
 
 - **Size.** Orca gives a plugin editor files of up to about 50 MiB (52,428,800 bytes). A larger
   file never reaches the viewer: Orca shows its own notice in the tab instead. A 48 MiB HAR with 9,000 requests opens in a second or
   two; masking or searching bodies in a file that size takes a moment longer. A `.har.zip` can
   hold a HAR that unpacks to up to 256 MB; its body files unpack to 256 MB each and 512 MB
-  together, and a body past that says so instead of showing.
-- **Search** looks at the first 2 MB of each body and of each request's WebSocket messages.
-  The Messages tab lists 500 frames at a time.
+  together. A body file over 256 MB, past the 512 MB budget, or damaged says which instead of
+  showing, in the view and in the agent export.
+- **Masking and saving large files.** Masking a large recording, or packing its sanitized
+  `.har.zip`, runs in slices with a progress notice. Orca opens the save dialog only within a
+  few seconds of the click, so a small file is saved in one click, and a larger one is masked
+  and packed first: a notice then offers the copy with its size, and **Save…** saves it with one
+  more click. A copy over 64 MB is more than Orca saves from a plugin, and a message says so.
+- **Search** looks at the first 2 MB of each body and of each request's WebSocket messages, and
+  keeps up to 64 MB of body text between searches; past that, bodies are read again for each
+  search. The Messages tab lists 500 frames at a time.
 - **Damaged files.** A file cut off or broken in the middle opens with the requests that could
   be read and a notice that says whether it is cut off or where it breaks (line and column),
   and how many requests were left out. A file that is not a HAR gets a message saying why.
