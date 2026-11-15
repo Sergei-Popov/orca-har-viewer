@@ -6,6 +6,7 @@
 import { decodeText, type SideFiles } from './har/body'
 import { readHar, type ReadResult } from './har/read'
 import { isZip, openHarZip, ZipError } from './har/zip'
+import { helloArrived } from './hello'
 import { fill, stringsFor, type Strings } from './i18n'
 import { installStyles } from './styles'
 import { HarApp, type Recording } from './ui/app'
@@ -30,21 +31,13 @@ function localize(): void {
   else document.body.append(app.root)
 }
 
-// Until Orca's hello arrives, orca.locale is the system language, not Orca's. Hello also sets the
-// light or dark class on <html> and fires `theme`, so either tells that it is in.
-function helloArrived(): Promise<void> {
-  const classes = document.documentElement.classList
-  const orca = globalThis.orca
-  if (!orca?.on || classes.contains('light') || classes.contains('dark')) return Promise.resolve()
-  return new Promise((resolve) => {
-    const subscription = orca.on('theme', () => {
-      subscription.dispose()
-      resolve()
-    })
-    setTimeout(resolve, 2000)
-  })
-}
-const hello = helloArrived().then(() => {
+// Orca's language is known only once its hello is in (see hello.ts); the view built before that
+// only shows the spinner and is rebuilt if the language differs.
+const orca = globalThis.orca
+const hello = helloArrived({
+  themed: () => document.documentElement.classList.contains('light') || document.documentElement.classList.contains('dark'),
+  onTheme: orca?.on ? (handler) => orca.on('theme', handler) : undefined,
+}).then(() => {
   localize()
   app.showLoading()
 })

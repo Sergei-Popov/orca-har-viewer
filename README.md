@@ -149,7 +149,8 @@ node tools/make-samples.ts        # sample files in .samples/ (git-ignored)
 orca plugin shot local.har-viewer --editor .samples/demo.har   # PNG of the editor
 ```
 
-- `src/editor.ts` — the custom editor entry: text or bytes document → `HarApp`.
+- `src/editor.ts` — the custom editor entry: text or bytes document → `HarApp`; `src/hello.ts`
+  holds the strings back until Orca has said which language it uses.
 - `src/ui/` — the view: `app.ts` (toolbar, filters, selection, masking, saving), `list.ts`
   (virtualized list and waterfall), `details.ts` (tabs), `viewers.ts` (JSON tree, source, hex,
   media), `overview.ts`, `export.ts`, `common.ts`; `src/styles.ts`, `src/icons.ts`,
