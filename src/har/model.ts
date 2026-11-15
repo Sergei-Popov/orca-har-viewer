@@ -1,6 +1,7 @@
 // The HAR as the viewer uses it: one flat record per request with the numbers worked out once
 // (start time, sizes, type, status), keeping the raw entry for the details pane.
 
+import { utf8Length } from './body'
 import { classify, type ResourceType } from './classify'
 import type { Har, HarEntry, HarInitiator, HarNameValue, HarPage } from './types'
 
@@ -83,7 +84,14 @@ export type Model = {
 
 export function buildModel(har: Har): Model {
   const raw = har.log.entries ?? []
-  const entries = raw.map((entry, index) => toEntry(entry, index))
+  const entries = raw.map((entry, index) => {
+    try {
+      return toEntry(entry, index)
+    } catch {
+      // A field of a type no recorder writes: the entry is listed with what is certain about it.
+      return { ...toEntry({}, index), raw: entry, url: typeof entry.request?.url === 'string' ? entry.request.url : '' }
+    }
+  })
   const pages = toPages(har.log.pages ?? [], entries)
   let start = Infinity
   let end = -Infinity
@@ -191,7 +199,8 @@ function toEntry(raw: HarEntry, index: number): Entry {
   const error = errorText(raw)
   const failed = rawStatus <= 0 || !!error
   const status = rawStatus > 0 ? rawStatus : 0
-  const mimeType = (response.content?.mimeType ?? '').split(';')[0].trim().toLowerCase()
+  const content = response.content
+  const mimeType = content && typeof content.mimeType === 'string' ? content.mimeType.split(';')[0].trim().toLowerCase() : ''
   const timings = toTimings(raw)
   const time = totalTime(raw.time, timings)
   const initiator = describeInitiator(raw._initiator)
@@ -220,7 +229,8 @@ function toEntry(raw: HarEntry, index: number): Entry {
     timings,
     pageId: typeof raw.pageref === 'string' ? raw.pageref : '',
     priority: typeof raw._priority === 'string' ? raw._priority : '',
-    httpVersion: typeof response.httpVersion === 'string' && response.httpVersion ? response.httpVersion : (request.httpVersion ?? '')
+    httpVersion:
+      typeof response.httpVersion === 'string' && response.httpVersion ? response.httpVersion : typeof request.httpVersion === 'string' ? request.httpVersion : ''
   }
 }
 
@@ -313,8 +323,13 @@ function resourceSize(raw: HarEntry): number {
   if (size >= 0) return size
   const text = content?.text
   if (typeof text === 'string') {
-    if (content?.encoding === 'base64') return Math.floor((text.replace(/=+$/, '').length * 3) / 4)
-    return new TextEncoder().encode(text).length
+    if (content?.encoding === 'base64') {
+      // Padding off the end, by hand: a regex anchored at the end backtracks on long runs of `=`.
+      let end = text.length
+      while (end > 0 && text.charCodeAt(end - 1) === 0x3d) end--
+      return Math.floor((end * 3) / 4)
+    }
+    return utf8Length(text)
   }
   return -1
 }
@@ -327,8 +342,8 @@ function describeInitiator(value: HarInitiator | string | undefined): { label: s
   let line = typeof value.lineNumber === 'number' ? value.lineNumber : -1
   // Script initiators name the top frame of their stack.
   let stack = value.stack
-  while (!url && stack) {
-    const frame = stack.callFrames?.find((f) => f && typeof f.url === 'string' && f.url)
+  while (!url && stack && typeof stack === 'object') {
+    const frame = Array.isArray(stack.callFrames) ? stack.callFrames.find((f) => f && typeof f.url === 'string' && f.url) : undefined
     if (frame) {
       url = frame.url ?? ''
       line = typeof frame.lineNumber === 'number' ? frame.lineNumber : -1

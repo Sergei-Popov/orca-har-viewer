@@ -228,3 +228,30 @@ test('review 12: a lost quote counts every request it hides, and nothing else po
   for (const entry of result.har.log.entries!) assert.ok(entry.request && typeof entry.request === 'object', 'no header objects as entries')
   assert.equal(lineColumn(lost.text, lost.at).line, result.issue!.line)
 })
+
+test('review 14: base64 padding is measured without a regex, so a run of = cannot stall opening', () => {
+  const entry = (text: string): HarEntry => ({
+    request: { method: 'GET', url: 'https://x.example.com/a.png' },
+    response: { status: 200, content: { mimeType: 'image/png', encoding: 'base64', text } }
+  })
+  const start = performance.now()
+  const model = buildModel({ log: { entries: [entry(`${'='.repeat(200_000)}A`), entry('QUJD'), entry('QQ==')] } })
+  assert.ok(performance.now() - start < 200)
+  assert.deepEqual(model.entries.slice(1).map((e) => e.resourceSize), [3, 1])
+})
+
+test('review 17: one entry with a field of an unexpected type does not fail the file', () => {
+  const ok = (path: string): HarEntry => ({ request: { method: 'GET', url: `https://x.example.com/${path}` }, response: { status: 200 } })
+  const odd = [
+    { request: { method: 'GET', url: 'https://x.example.com/mime-number' }, response: { status: 200, content: { mimeType: 0 } } },
+    { request: { method: 'GET', url: 'https://x.example.com/mime-object' }, response: { status: 200, content: { mimeType: {} } } },
+    { request: { method: 'GET', url: 'https://x.example.com/frames-object' }, _initiator: { type: 'script', stack: { callFrames: {} } } },
+    { request: { method: 'GET', url: 'https://x.example.com/frames-string', httpVersion: 2 }, _initiator: { type: 'script', stack: { callFrames: 'x', parent: 'y' } } }
+  ] as unknown as HarEntry[]
+  const model = buildModel({ log: { entries: [ok('first'), ...odd, ok('last')] } })
+  assert.deepEqual(
+    model.entries.map((e) => e.url.split('/').pop()),
+    ['first', 'mime-number', 'mime-object', 'frames-object', 'frames-string', 'last']
+  )
+  assert.equal(model.entries[4].httpVersion, '')
+})
