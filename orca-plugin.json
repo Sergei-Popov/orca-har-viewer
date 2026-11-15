@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "har-viewer",
+  "name": "HAR Viewer",
+  "version": "0.1.0",
+  "description": "Opens HTTP Archive (.har) files from browsers, Playwright and agents as a DevTools-style network log: request list with a waterfall, filters, headers, bodies and timings, plus an export with secrets removed. Offline.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "sandboxed-ui",
+  "pluginApi": 1,
+  "contributes": {
+    "customEditors": [
+      {
+        "id": "har-viewer",
+        "title": "HAR Viewer",
+        "extensions": [
+          ".har-viewer"
+        ],
+        "entry": "editor/main.ts",
+        "frame": "isolated"
+      }
+    ]
+  },
+  "author": {
+    "name": "Сергей Попов",
+    "url": "https://github.com/Sergei-Popov"
+  },
+  "repository": "https://github.com/Sergei-Popov/orca-har-viewer",
+  "license": "MIT"
+}
