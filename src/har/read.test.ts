@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { demoHar } from '../fixtures/demo'
 import { buildModel, parseTime, splitUrl } from './model'
-import { plainMessage, readHar } from './read'
+import { jsonError, lineColumn, plainMessage, readHar } from './read'
 import type { HarEntry } from './types'
 
 test('a valid HAR reads as is', () => {
@@ -161,6 +161,8 @@ test('classification without Chrome fields: Sec-Fetch-Dest, MIME, extension, Web
 
 test('JSON.parse messages lose the position the viewer shows as a line and column', () => {
   assert.equal(plainMessage("Expected ',' or '}' after property value in JSON at position 157328 (line 2959 column 32)"), "Expected ',' or '}' after property value")
+  assert.equal(plainMessage(`Unexpected token ']', ..."s":200}},\n]}}\n" is not valid JSON`), "Unexpected token ']'")
+  assert.equal(plainMessage(`Unexpected token ']', "[1,]" is not valid JSON`), "Unexpected token ']'")
   assert.equal(plainMessage('Unexpected end of JSON input'), 'Unexpected end of JSON input')
   assert.equal(plainMessage('Unexpected token } in JSON at position 12'), 'Unexpected token }')
   const result = readHar('This is a plain text file.\n')
@@ -170,4 +172,59 @@ test('JSON.parse messages lose the position the viewer shows as a line and colum
     assert.ok(!/position \d/.test(result.message), result.message)
     assert.equal(result.line, 1)
   }
+})
+
+/** demo.har pretty-printed, with one edit made where `find` first occurs (after `from`). */
+function damage(find: string, replace: string, from = 0): { text: string; at: number } {
+  const text = JSON.stringify(demoHar(), null, 2)
+  const at = text.indexOf(find, from)
+  assert.ok(at >= 0, find)
+  return { text: text.slice(0, at) + replace + text.slice(at + find.length), at }
+}
+
+test('review 12: syntax errors are reported where they are, not as a cut at the end', () => {
+  const total = demoHar().log.entries!.length
+  const lastEntryEnd = JSON.stringify(demoHar(), null, 2).lastIndexOf('      }\n    ]')
+  const cases: { name: string; edit: { text: string; at: number }; recovered: number; skipped: number; offset: number }[] = []
+  const comma = damage('      }\n    ]', '      },\n    ]', lastEntryEnd)
+  cases.push({ name: 'trailing comma', edit: comma, recovered: total, skipped: 0, offset: comma.text.indexOf(']', comma.at) })
+  const nan = damage('"time": ', '"time": NaN, "was": ')
+  cases.push({ name: 'NaN', edit: nan, recovered: total - 1, skipped: 1, offset: nan.at + 8 })
+  const single = damage('"method": "GET"', `"method": 'GET'`)
+  cases.push({ name: 'single quotes', edit: single, recovered: total - 1, skipped: 1, offset: single.at + 10 })
+  const comment = damage('"entries": [\n      {', '"entries": [\n      // the first request\n      {')
+  cases.push({ name: 'a comment line', edit: comment, recovered: total, skipped: 0, offset: comment.text.indexOf('//', comment.at) })
+  for (const c of cases) {
+    const result = readHar(c.edit.text)
+    assert.ok(result.ok, c.name)
+    if (!result.ok) continue
+    assert.equal(result.issue?.kind, 'invalid', c.name)
+    assert.deepEqual([result.issue!.recovered, result.issue!.skipped], [c.recovered, c.skipped], c.name)
+    const where = lineColumn(c.edit.text, c.offset)
+    assert.deepEqual([result.issue!.line, result.issue!.column], [where.line, where.column], c.name)
+    assert.ok(!result.issue!.message.includes('is not valid JSON'), c.name)
+  }
+  // A real cut is still a cut, also inside a string.
+  const text = JSON.stringify(demoHar(), null, 2)
+  const cut = readHar(text.slice(0, text.indexOf('"url": "') + 20))
+  assert.ok(cut.ok && cut.issue?.kind === 'truncated')
+  assert.deepEqual(jsonError('[1, "ab'), { offset: 7, eof: true })
+  assert.deepEqual(jsonError('[1, 2]  x'), { offset: 8, eof: false })
+  assert.equal(jsonError(' {"a": [1, -2.5e+3, true, null, "\\u00e9\\n"]} '), null)
+})
+
+test('review 12: a lost quote counts every request it hides, and nothing else poses as one', () => {
+  const total = demoHar().log.entries!.length
+  // The opening quote of the third entry's "url" key.
+  let from = 0
+  for (let k = 0; k < 3; k++) from = JSON.stringify(demoHar(), null, 2).indexOf('"request": {', from) + 1
+  const lost = damage('"url"', 'url"', from)
+  const result = readHar(lost.text)
+  assert.ok(result.ok)
+  if (!result.ok) return
+  assert.equal(result.issue?.kind, 'invalid')
+  assert.equal(result.issue!.recovered + result.issue!.skipped, total)
+  assert.equal(result.har.log.entries!.length, result.issue!.recovered)
+  for (const entry of result.har.log.entries!) assert.ok(entry.request && typeof entry.request === 'object', 'no header objects as entries')
+  assert.equal(lineColumn(lost.text, lost.at).line, result.issue!.line)
 })
