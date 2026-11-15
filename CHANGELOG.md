@@ -7,6 +7,8 @@ All notable changes to this plugin are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-15
+
 ### Added
 
 - **HAR Viewer** custom editor, the default view for `.har` and `.har.zip` (Archive Viewer, when
