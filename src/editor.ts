@@ -10,13 +10,44 @@ import { fill, stringsFor, type Strings } from './i18n'
 import { installStyles } from './styles'
 import { HarApp, type Recording } from './ui/app'
 
-const locale = globalThis.orca?.locale || navigator.language || 'en'
-const strings = stringsFor(locale)
-document.documentElement.lang = locale
 installStyles()
-const app = new HarApp({ strings, locale, saveAs: globalThis.orca?.files?.saveAs })
-document.body.append(app.root)
+let locale = ''
+let strings!: Strings
+let app!: HarApp
+localize()
 app.showLoading()
+
+/** Builds the view for Orca's language; again when the language turns out different. */
+function localize(): void {
+  const next = globalThis.orca?.locale || navigator.language || 'en'
+  if (app && next === locale) return
+  locale = next
+  strings = stringsFor(locale)
+  document.documentElement.lang = locale
+  const previous = app
+  app = new HarApp({ strings, locale, saveAs: globalThis.orca?.files?.saveAs })
+  if (previous) previous.root.replaceWith(app.root)
+  else document.body.append(app.root)
+}
+
+// Until Orca's hello arrives, orca.locale is the system language, not Orca's. Hello also sets the
+// light or dark class on <html> and fires `theme`, so either tells that it is in.
+function helloArrived(): Promise<void> {
+  const classes = document.documentElement.classList
+  const orca = globalThis.orca
+  if (!orca?.on || classes.contains('light') || classes.contains('dark')) return Promise.resolve()
+  return new Promise((resolve) => {
+    const subscription = orca.on('theme', () => {
+      subscription.dispose()
+      resolve()
+    })
+    setTimeout(resolve, 2000)
+  })
+}
+const hello = helloArrived().then(() => {
+  localize()
+  app.showLoading()
+})
 
 type Opened = { result: ReadResult; files?: SideFiles; zip: boolean }
 
@@ -59,6 +90,7 @@ if (!api) {
   api.onDidChange(async (doc) => {
     const current = ++generation
     if (!shown) app.showLoading()
+    await hello
     // Let the spinner paint before a large file is parsed on this thread.
     await new Promise((resolve) => setTimeout(resolve, 16))
     if (current !== generation) return
