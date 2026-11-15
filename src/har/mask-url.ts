@@ -59,6 +59,8 @@ function pairNames(part: string | null): string[] {
 /** Whether a URL belongs to an OAuth or OpenID flow, so its `code` is a secret. */
 export function isOauthUrl(url: string): boolean {
   const { base, query, hash } = splitUrl(url)
+  // A file a page loads (`login.css`, `reset.js?hash=…`) is never a sign-in step.
+  if (ASSET_FILE.test(base)) return false
   if (OAUTH_PATH.test(base) || hasOauthNames(pairNames(query))) return true
   if (hash === null) return false
   const route = splitHash(hash)
@@ -98,10 +100,11 @@ function isTokenParam(name: string, value: string, hub: boolean, counter: Counte
 }
 
 /** Files a page loads (scripts, styles, fonts, images): their content hashes are no secrets. */
-const STATIC_PATH = /\.(?:m?js|cjs|css|map|woff2?|ttf|otf|eot|png|jpe?g|gif|webp|avif|svg|ico|bmp|mp4|webm|mp3|ogg|wasm)$|\/(?:_next|static|assets|chunks|dist|build|fonts|images|img)\//i
+const ASSET_FILE = /\.(?:m?js|cjs|css|map|woff2?|ttf|otf|eot|png|jpe?g|gif|webp|avif|svg|ico|bmp|mp4|webm|mp3|ogg|wasm)$/i
+const STATIC_PATH = /\/(?:_next|static|assets|chunks|dist|build|fonts|images|img)\//i
 
 function isStaticPath(base: string): boolean {
-  return STATIC_PATH.test(base)
+  return ASSET_FILE.test(base) || STATIC_PATH.test(base)
 }
 
 /** Masks secret query and fragment parameters, nested URLs, URL passwords and token-shaped path parts. */

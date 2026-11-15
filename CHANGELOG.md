@@ -33,11 +33,12 @@ All notable changes to this plugin are documented here. The format follows
   `.har` or `.har.zip`. Masking knows credential headers and cookies (folded and nameless
   ones too), secret-named parameters in URLs, fragments and hash routes, form fields
   (urlencoded, multipart, plain text), JSON keys and whole secret-named objects, `name: value`
-  lines, quoted and unquoted HTML fields, OAuth codes and CAS tickets in sign-in flows, SAML and
-  WS-Federation messages, SignalR connection tokens (`?id=` on transport URLs too), URLs and
-  JSON nested in values (encoded once or more), token shapes anywhere, and values that look
-  random (with an allowlist for hashes, IDs and asset names, and the IDs the recording's JSON
-  names). It masks
+  lines, quoted and unquoted HTML fields, OAuth codes, CAS tickets and login hashes (Telegram,
+  e-mail verification) in sign-in flows, SAML and WS-Federation messages, SignalR connection
+  tokens (`?id=` on transport URLs too), the recording's credentials wherever else they appear,
+  URLs and JSON nested in values (encoded once or more), token shapes anywhere, and values that
+  look random (with an allowlist for hashes, IDs and asset names, and the IDs the recording's
+  JSON names). It masks
   JSON in place (64-bit integers and spacing stay), every body the viewer shows as text
   whatever its type (written back in its encoding, UTF-16 byte for byte), JSON wrapped in
   SignalR, Socket.IO (long-polling too), SockJS, STOMP, server-sent events, JSONP, XSSI guards,

@@ -189,7 +189,8 @@ test('review 6: an ID the JSON keeps under an id name stays in REST paths, befor
     response: { status: 201, content: { mimeType: 'application/json', text: JSON.stringify({ id: order, user: { userId: ulid } }) } }
   }
   // The failing detail request comes before the body that names the order, and one after it.
-  const input = har(get(`/v1/orders/${order}`, 500), created, get(`/v1/users/${ulid}/orders`), get(`/v1/reset/${reset}`), get(`/v1/x?token=${order}`))
+  // (A value also sent as a credential, `?token=<order>`, would never be kept: see review3b.test.ts.)
+  const input = har(get(`/v1/orders/${order}`, 500), created, get(`/v1/users/${ulid}/orders`), get(`/v1/reset/${reset}`), get(`/v1/x?token=${reset}`))
   const { har: out, report } = sanitizeHar(input)
   const urls = out.log.entries!.map((e) => e.request?.url)
   assert.equal(urls[0], `https://api.example.com/v1/orders/${order}`)

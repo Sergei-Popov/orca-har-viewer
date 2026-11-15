@@ -94,6 +94,9 @@ requests were masked. **Save sanitized…** writes a masked copy of the file (`.
   cookies folded into one `Set-Cookie` with `, ` and cookies without a name (cookie names, the
   auth scheme and cookie attributes stay), and headers named like `X-Api-Key` or `X-Auth-Token`
   (`Access-Control-*` headers, which say what a server allows, stay);
+- the same value wherever else it stands whole, once the recording sends it as one of these or
+  under a secret name (16 characters or more): a session cookie that a sessions list shows as
+  `[{"id": …}]` is masked there and in `/sessions/<id>`;
 - query parameters (in the URL, its fragment and hash routes such as `#/callback?code=…`, and in
   the HAR's query string list), form fields (urlencoded, multipart and plain-text forms), JSON
   keys, `name: value` and `name=value` lines (YAML, `.properties`, STOMP headers) and HTML
@@ -108,8 +111,10 @@ requests were masked. **Save sanitized…** writes a masked copy of the file (`.
   events), and any URL parameter that holds the same token;
 - everything inside a secret-named JSON object, its keys included
   (`{"sessions": {"<id>": {…}}}`);
-- OAuth `code` and CAS `ticket` wherever the request shows a sign-in flow: a sign-in, auth or
-  callback path, or `state`, `grant_type` or `redirect_uri` beside it, in URLs, forms, JSON and
+- OAuth `code`, CAS `ticket` and a login `hash` (Telegram's Login Widget and Mini App data,
+  e-mail verification links) wherever the request shows a sign-in flow: a sign-in, auth,
+  callback, verification, confirmation, activation or reset path, or `state`, `grant_type`,
+  `redirect_uri` or Telegram's `auth_date` beside it, in URLs, forms, JSON, headers and
   `form_post` pages;
 - URLs nested in parameter values (`?next=/reset?token=…`), also when encoded twice or more,
   and passwords in URLs;
@@ -135,11 +140,12 @@ keys, URL paths and headers, whatever its name. What stays, because you need to 
 UUIDs; `sha256-`/`sha384-`/`sha512-` integrity hashes; `data:` base64 payloads; content hashes in
 file and host names (`main.3f9ac1….js`); static asset paths (`/_next/`, `/static/`, `/assets/`
 and script, style, font, image and media files); 24- and 40-digit hex path segments (object IDs,
-git commits); values named as identifiers (`id`, `requestId`, `etag`, `hash`, `version`, `build`
-…), in headers too (`X-Build`, `X-Commit`), and the same value wherever else it appears (an order
-ID the JSON keeps under `id` stays in `/orders/<id>`), unless a credential word comes first
-(`X-Auth-Id`, `auth_req_id`, `X-Shopify-Hmac-Sha256`) or the JSON keeps it inside a secret-named
-object (`{"session": {"id": …}}`); the boundary and charset in `Content-Type`, as the body needs
+git commits); values named as identifiers (`id`, `addressId`, `requestId`, `etag`, `hash` outside
+sign-in flows, `version`, `build` …), in headers too (`X-Build`, `X-Commit`), and the same value
+wherever else it appears (an order ID the JSON keeps under `id` stays in `/orders/<id>`), unless
+a credential word comes first (`X-Auth-Id`, `X-Auth-Hash`, `auth_req_id`,
+`X-Shopify-Hmac-Sha256`), the JSON keeps it inside a secret-named object
+(`{"session": {"id": …}}`) or the recording sends it as a credential; the boundary and charset in `Content-Type`, as the body needs
 them (its other parameters are judged as any value); `ETag`, request, trace and correlation ID headers, `traceparent`, CSP and digest headers,
 `Server-Timing`; and JavaScript and CSS bodies, so code is never rewritten. Long base64 data
 under an ordinary name (an inline image in JSON) counts as random and is masked.
@@ -176,10 +182,19 @@ not unpacked (see the budget below), since they could not be masked.
 - HTML-escaped JSON is taken apart in attributes; escaped JSON in text nodes gets the text rules.
 - Over-masking, not leaks: a random-looking value under an ordinary name (`?cursor=`,
   `?code_challenge=`, `"customer"`, `"paymentIntent"`) is masked unless a JSON body of the same
-  recording keeps it under an identifier's name; only JSON bodies are read for that, not JSON
-  inside HTML or other text. Under a secret-named object, a key made only of letters that happens
-  to read like a field name (about 0.4% of random 24-letter IDs) is kept, though its values are
-  masked.
+  recording keeps it under an identifier's name. Under a secret-named object, a key made only of
+  letters that happens to read like a field name (about 0.4% of random 24-letter IDs) is kept,
+  though its values are masked.
+- The identifiers known before masking come from whole JSON bodies only. An ID named only by
+  JSON inside another body (`__NEXT_DATA__` in HTML, NDJSON, JSONP, an XSSI guard, SignalR
+  frames, multipart parts, a body cut off at the browser's limit) is learned when that body is
+  masked, so a URL masked before it shows `[masked]` where a later one keeps the ID. This only
+  masks more, never less.
+- SignalR edge cases: with `negotiateVersion` 0 (clients before ASP.NET Core 3.0) the
+  transports send the `connectionId`, masked in their URLs but kept in the negotiate response;
+  transports recorded without their negotiate request (DevTools opened mid-session) keep
+  `?id=<token>`; and any path ending in `/negotiate` counts as a hub, so `?id=` on the path
+  before it (`/api?id=48207` beside `/api/negotiate`) is masked even when it is not a token.
 
 ## Limits
 
