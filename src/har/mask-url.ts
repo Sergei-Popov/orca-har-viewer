@@ -65,6 +65,38 @@ export function isOauthUrl(url: string): boolean {
   return OAUTH_PATH.test(route.route) || hasOauthNames(pairNames(route.query))
 }
 
+// ── SignalR ──────────────────────────────────────────────────────────────────────────────────
+
+/** `host/path` of a URL's part before `?`, lower case, without scheme or a trailing slash: a hub's key. */
+function hubKey(base: string): string {
+  return base.replace(/^[a-z][a-z0-9+.-]{0,31}:\/\//i, '').replace(/\/+$/, '').toLowerCase()
+}
+
+/** The hub a SignalR negotiate request is for (`https://host/_blazor/negotiate?…` → `host/_blazor`), or null. */
+export function negotiatedHub(url: string): string | null {
+  const match = /^(.*\/[^/]*)\/negotiate\/?$/i.exec(splitUrl(url).base)
+  return match ? hubKey(match[1]) : null
+}
+
+/**
+ * Whether a URL is a transport URL of a hub the recording negotiated (`wss://host/_blazor?id=…`,
+ * the long-polling and server-sent events requests): its `id` is the connection token.
+ */
+export function isHubUrl(url: string, hubs: Set<string> | undefined): boolean {
+  if (!hubs?.size) return false
+  const key = hubKey(splitUrl(url).base)
+  if (hubs.has(key)) return true
+  // A path alone (`:path`, a relative URL): the hub's path on any host.
+  if (key.startsWith('/')) for (const hub of hubs) if (hub.slice(hub.indexOf('/')) === key) return true
+  return false
+}
+
+/** A parameter that holds a connection token: `id` on a hub's transport URL, or a token a body named. */
+function isTokenParam(name: string, value: string, hub: boolean, counter: Counter): boolean {
+  if (hub && name.trim().toLowerCase() === 'id') return true
+  return !!counter.tokens?.size && counter.tokens.has(safeDecode(value))
+}
+
 /** Files a page loads (scripts, styles, fonts, images): their content hashes are no secrets. */
 const STATIC_PATH = /\.(?:m?js|cjs|css|map|woff2?|ttf|otf|eot|png|jpe?g|gif|webp|avif|svg|ico|bmp|mp4|webm|mp3|ogg|wasm)$|\/(?:_next|static|assets|chunks|dist|build|fonts|images|img)\//i
 
@@ -79,6 +111,7 @@ export function maskUrl(url: string, counter: Counter, kind: MaskKind = 'query',
   const oauth = !!options.oauth || isOauthUrl(url)
   // A file the page loads: hashes in its name and cache-busting values are not secrets.
   const inner: MaskOptions = { ...options, oauth, noEntropy: options.noEntropy || isStaticPath(rawBase) }
+  const hub = isHubUrl(rawBase, counter.hubs)
   const params = (part: string) =>
     part
       .split('&')
@@ -89,7 +122,7 @@ export function maskUrl(url: string, counter: Counter, kind: MaskKind = 'query',
         const value = pair.slice(eq + 1)
         if (!value || value === MASK) return pair
         const decodedName = safeDecode(name)
-        if (isSecretName(decodedName, inner)) {
+        if (isSecretName(decodedName, inner) || isTokenParam(decodedName, value, hub, counter)) {
           counter.add(kind)
           return `${name}=${MASK}`
         }
@@ -189,7 +222,7 @@ export function maskParams(
   const out = params.map((param, index) => {
     if (!param || typeof param !== 'object') return maskStrings(param, counter, kind) as HarNameValue
     let next: HarNameValue = param
-    const secret = isSecretName(names[index], inner)
+    const secret = isSecretName(names[index], inner) || (typeof param.value === 'string' && isTokenParam(names[index], param.value, !!inner.hub, counter))
     if (typeof param.value === 'string' && param.value && param.value !== MASK) {
       let value: string
       if (secret) {
