@@ -36,7 +36,7 @@
     },
     {
       "path": "images/shot-5-websocket.png",
-      "alt": "Follow one order: 19 socket messages filtered to 48207, sent and received, one opened as JSON. Shown in Orca's light theme."
+      "alt": "Follow one order: 4 of 19 socket messages match 48207, sent and received, one opened as JSON. Shown in Orca's light theme."
     }
   ],
   "engines": {

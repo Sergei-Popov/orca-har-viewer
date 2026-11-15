@@ -98,7 +98,7 @@
     {
       "out": "images/shot-5-websocket.png",
       "headline": "WebSocket frames, sent and received",
-      "alt": "Follow one order: 19 socket messages filtered to 48207, sent and received, one opened as JSON. Shown in Orca's light theme.",
+      "alt": "Follow one order: 4 of 19 socket messages match 48207, sent and received, one opened as JSON. Shown in Orca's light theme.",
       "stage": {
         "file": ".orca/listing/samples/dashboard.har",
         "theme": "light",
@@ -108,8 +108,7 @@
           { "clickText": "/socket?v=3" },
           { "clickText": "Messages", "exact": false },
           { "drag": [[616, 300], [500, 300]] },
-          { "click": [580, 223] },
-          { "type": "48207" },
+          { "fill": "Filter messages", "value": "48207" },
           { "wait": 400 },
           { "clickText": "\"id\":48207,\"status\":\"packed\"", "exact": false },
           { "wheel": [200, 350, -1000] },
