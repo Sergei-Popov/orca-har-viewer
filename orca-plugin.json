@@ -1,32 +1,75 @@
 {
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
   "manifestVersion": 2,
+  "execution": "sandboxed-ui",
   "id": "har-viewer",
   "name": "HAR Viewer",
   "version": "0.1.0",
-  "description": "Opens HTTP Archive (.har) files from browsers, Playwright and agents as a DevTools-style network log: request list with a waterfall, filters, headers, bodies and timings, plus an export with secrets removed. Offline.",
+  "description": "Shows .har and Playwright .har.zip files as a network log: request list, waterfall, filters and each request's headers, payload, response, cookies, timing and WebSocket frames. Copy as cURL, export an agent digest, save a masked copy. Independent; not affiliated with Playwright or any browser maker.",
+  "author": {
+    "name": "Sergei Popov",
+    "url": "https://github.com/Sergei-Popov"
+  },
+  "repository": "https://github.com/Sergei-Popov/orca-har-viewer",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "cover": {
+    "path": "images/cover.png",
+    "alt": "Known secrets masked, 28 values in 15 requests: the request list and waterfall, a failed POST /v1/reports/export selected."
+  },
+  "screenshots": [
+    {
+      "path": "images/shot-1-agent-export.png",
+      "alt": "A Markdown digest of the 4 failed requests, bodies cut to 2,000 characters and known secrets masked, to copy or save as .md."
+    },
+    {
+      "path": "images/shot-2-errors.png",
+      "alt": "The Errors filter keeps 4 of 29 requests, beside an overview of their types, status codes and the 2 domains they came from."
+    },
+    {
+      "path": "images/shot-3-timing.png",
+      "alt": "A slow request by phase: DNS 18 ms, connection 42 ms, SSL/TLS 31 ms, waiting 1.20 s, and Server-Timing's report query 1.10 s."
+    },
+    {
+      "path": "images/shot-4-json-tree.png",
+      "alt": "A 2.4 kB JSON response in Tree view, Source a click away: 20 orders, the first opened to its id, customer, total and status."
+    },
+    {
+      "path": "images/shot-5-websocket.png",
+      "alt": "Follow one order: 4 of 19 socket messages match 48207, sent and received, one opened as JSON. Shown in Orca's light theme."
+    }
+  ],
   "engines": {
     "orca": ">=1.4.248"
   },
-  "execution": "sandboxed-ui",
   "pluginApi": 1,
   "contributes": {
     "customEditors": [
       {
-        "id": "har-viewer",
+        "id": "har",
         "title": "HAR Viewer",
+        "icon": "icons/har.png",
         "extensions": [
-          ".har-viewer"
+          ".har"
         ],
-        "entry": "editor/main.ts",
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "text",
+        "frame": "isolated"
+      },
+      {
+        "id": "har-zip",
+        "title": "HAR Viewer",
+        "icon": "icons/har.png",
+        "extensions": [
+          ".har.zip"
+        ],
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "bytes",
         "frame": "isolated"
       }
     ]
   },
-  "author": {
-    "name": "Сергей Попов",
-    "url": "https://github.com/Sergei-Popov"
-  },
-  "repository": "https://github.com/Sergei-Popov/orca-har-viewer",
-  "license": "MIT"
+  "capabilities": []
 }
