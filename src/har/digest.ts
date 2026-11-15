@@ -2,7 +2,8 @@
 // Callers pass entries of the masked HAR, so the digest never holds secrets; bodies are cut.
 
 import { EN_UNITS, dateTime, formatBytes, formatMs } from '../format'
-import { requestBody, responseBody, viewKind, parseJson, type Body, type SideFiles } from './body'
+import { requestBody, responseBody, viewKind, type Body, type SideFiles } from './body'
+import { reindentJson } from './json-text'
 import type { Entry, Model } from './model'
 import type { HarNameValue } from './types'
 
@@ -143,10 +144,8 @@ function bodyBlock(title: string, body: Body, maxBody: number): string[] {
   if (body.kind === 'bytes') return [`${title}: binary (${mime}, ${formatBytes(body.size)}), not included.`, '']
   const kind = viewKind(body.mimeType, body.text)
   let text = body.text
-  if (kind === 'json') {
-    const value = parseJson(text)
-    if (value !== undefined) text = JSON.stringify(value, null, 2)
-  }
+  // Indented token by token, so 64-bit integers and every other value stay exactly as written.
+  if (kind === 'json') text = reindentJson(text) ?? text
   const cutText = cut(text, maxBody)
   const language = { json: 'json', html: 'html', xml: 'xml', js: 'js', css: 'css' }[kind as string] ?? 'text'
   return [`${title} (${mime}, ${formatBytes(body.size)}):`, '', ...fence(cutText, language), '']

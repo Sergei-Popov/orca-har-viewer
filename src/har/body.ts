@@ -217,10 +217,29 @@ export function viewKind(mimeType: string, text?: string): ViewKind {
   return 'binary'
 }
 
-/** JSON.parse that returns undefined instead of throwing. */
+/** A number whose literal a double would change (a 64-bit ID, a long decimal): kept as written. */
+export class JsonNumber {
+  constructor(readonly source: string) {}
+  toString(): string {
+    return this.source
+  }
+}
+
+type Reviver = (this: unknown, key: string, value: unknown, context?: { source?: string }) => unknown
+
+/** Numbers a double cannot hold exactly come back as `JsonNumber`, where the engine tells their text. */
+const keepLongNumbers: Reviver = (key, value, context) =>
+  typeof value === 'number' && context?.source !== undefined && context.source.length > 15 && String(value) !== context.source
+    ? new JsonNumber(context.source)
+    : value
+
+/**
+ * JSON.parse that returns undefined instead of throwing. Numbers with 16 or more digits that a
+ * double would round come back as `JsonNumber`, so the viewer shows them as they are written.
+ */
 export function parseJson(text: string): unknown {
   try {
-    return JSON.parse(text)
+    return /\d{16}/.test(text) ? JSON.parse(text, keepLongNumbers as Parameters<typeof JSON.parse>[1]) : JSON.parse(text)
   } catch {
     return undefined
   }
