@@ -33,15 +33,20 @@ export function formatMs(ms: number, units: Units = EN_UNITS, locale = 'en'): st
   return `${number(ms / 60_000, 1, locale)} ${units.min}`
 }
 
+/** Russian separators for any `ru-*` tag; English ones otherwise, whatever else the tag is. */
+function numberLocale(locale: string): string {
+  return locale.toLowerCase().startsWith('ru') ? 'ru' : 'en'
+}
+
 export function number(value: number, digits: number, locale = 'en'): string {
-  return value.toLocaleString(locale === 'ru' ? 'ru' : 'en', {
+  return value.toLocaleString(numberLocale(locale), {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits
   })
 }
 
 export function count(value: number, locale = 'en'): string {
-  return value.toLocaleString(locale === 'ru' ? 'ru' : 'en')
+  return value.toLocaleString(numberLocale(locale))
 }
 
 /** 10:22:01.123 in UTC (HAR times are absolute; UTC keeps screenshots and exports stable). */

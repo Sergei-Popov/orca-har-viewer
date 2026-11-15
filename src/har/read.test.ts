@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { demoHar } from '../fixtures/demo'
 import { buildModel, parseTime, splitUrl } from './model'
-import { readHar } from './read'
+import { plainMessage, readHar } from './read'
 import type { HarEntry } from './types'
 
 test('a valid HAR reads as is', () => {
@@ -157,4 +157,17 @@ test('classification without Chrome fields: Sec-Fetch-Dest, MIME, extension, Web
     model.entries.map((e) => e.type),
     ['fetch', 'doc', 'fetch', 'js', 'img', 'font', 'media', 'ws', 'wasm', 'other']
   )
+})
+
+test('JSON.parse messages lose the position the viewer shows as a line and column', () => {
+  assert.equal(plainMessage("Expected ',' or '}' after property value in JSON at position 157328 (line 2959 column 32)"), "Expected ',' or '}' after property value")
+  assert.equal(plainMessage('Unexpected end of JSON input'), 'Unexpected end of JSON input')
+  assert.equal(plainMessage('Unexpected token } in JSON at position 12'), 'Unexpected token }')
+  const result = readHar('This is a plain text file.\n')
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.equal(result.reason, 'not-json')
+    assert.ok(!/position \d/.test(result.message), result.message)
+    assert.equal(result.line, 1)
+  }
 })

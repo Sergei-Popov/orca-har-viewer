@@ -52,11 +52,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Where JSON.parse stopped, from its message ("… at position 123 …"); the end when it ran out. */
+/** Where JSON.parse stopped, from its message ("… at position 123 …"); the end when it ran out; -1 when it does not say. */
 export function errorOffset(message: string, length: number): number {
   const match = /position (\d+)/.exec(message)
   if (match) return Math.min(Number(match[1]), length)
-  return length
+  return /end of (JSON )?input/i.test(message) ? length : -1
 }
 
 export function lineColumn(text: string, offset: number): { line: number; column: number } {
@@ -105,7 +105,9 @@ function wanted(frame: Frame | undefined): frame is Frame {
  * its brackets and quotes still balance.
  */
 function recover(text: string, message: string): ReadResult {
-  const offset = errorOffset(message, text.length)
+  let offset = errorOffset(message, text.length)
+  // No position given: plain text fails at its first character, JSON at its end.
+  if (offset < 0) offset = /^\s*[[{]/.test(text) ? text.length : Math.max(0, text.search(/\S/))
   const where = lineColumn(text, offset)
   const entries: HarEntry[] = []
   const pages: HarPage[] = []
@@ -197,7 +199,7 @@ function recover(text: string, message: string): ReadResult {
     return {
       ok: false,
       reason: looksJson ? 'not-har' : 'not-json',
-      message: looksJson ? message : 'This file is not JSON, so it cannot be an HTTP Archive.',
+      message: plainMessage(message),
       ...where
     }
   }
@@ -205,8 +207,13 @@ function recover(text: string, message: string): ReadResult {
   return {
     ok: true,
     har: { log: { ...log, pages, entries } },
-    issue: { kind, message, line: where.line, column: where.column, recovered: entries.length, skipped }
+    issue: { kind, message: plainMessage(message), line: where.line, column: where.column, recovered: entries.length, skipped }
   }
+}
+
+/** JSON.parse's message without the position, which the caller reports as a line and column. */
+export function plainMessage(message: string): string {
+  return message.replace(/\s*(?:in JSON )?at position \d+(?:\s*\(line \d+ column \d+\))?/, '').trim()
 }
 
 /** Index just past the string that starts after the opening quote at `from - 1`. */
