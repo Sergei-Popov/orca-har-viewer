@@ -14,7 +14,9 @@ import { formFields, queryFields } from './fields'
 import { Haystacks } from './query'
 import { MASK, maskBodyBytes, maskBodyText, maskHeaderValue, maskText, maskUrl, sanitizeHar, type Counter } from './sanitize'
 import type { Har, HarEntry } from './types'
-import { openHarZip } from './zip'
+import { stringsFor } from '../i18n'
+import { openError } from '../open-errors'
+import { openHarZip, ZipError } from './zip'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -510,4 +512,15 @@ test('search keeps a bounded amount of body text, and still finds what it no lon
   for (const e of model.entries) assert.ok(haystacks.get(e, 'all').join('\n').includes(`needle${e.index}`))
   // Read again past the cap: still found.
   assert.ok(haystacks.get(model.entries[3], 'all').join('\n').includes('needle3'))
+})
+
+test('review 22: a ZIP error shows the translated message only, no English detail under it', () => {
+  const ru = stringsFor('ru', true)
+  for (const code of ['not-zip', 'no-har', 'damaged', 'too-large', 'method'] as const) {
+    const [message, detail] = openError(new ZipError(code, 'This ZIP holds no .har file.'), ru)
+    assert.equal(detail, undefined, code)
+    assert.ok(/[а-яё]/i.test(message) && !/ZIP holds/.test(message), `${code}: ${message}`)
+  }
+  // Other errors still show what went wrong.
+  assert.deepEqual(openError(new Error('boom'), ru), [ru.errorZipDamaged, 'boom'])
 })
